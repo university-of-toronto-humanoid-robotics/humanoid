@@ -1,9 +1,10 @@
+name: humanoid
 services:
   dev:
     build: .
     image: humanoid-dev
     volumes:
-      - .:/workspaces/humanoid
+      - ..:/workspaces/humanoid
       - x11:/tmp/.X11-unix
     environment:
       DISPLAY: ":0"
