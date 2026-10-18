@@ -14,6 +14,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build image
-      run: docker build -t humanoid-dev .
+      run: docker build -t humanoid-dev docker
     - name: Check ROS and MuJoCo
       run: docker run --rm humanoid-dev python3 -c "import rclpy, mujoco, os; print('ROS', os.environ['ROS_DISTRO'], '| MuJoCo', mujoco.__version__)"
