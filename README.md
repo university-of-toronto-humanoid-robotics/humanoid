@@ -1,6 +1,24 @@
 # humanoid
 
-Clone this repo (all our code lives here), then set up for your OS. New here? Then do the [onboarding task](onboarding/README.md).
+Clone this repo (all our code lives here), then set up for your OS. New here? Then do the [onboarding task](docs/onboarding/README.md).
+
+## Structure
+
+```
+docker/          shared environment
+docs/            onboarding, architecture
+  decisions/     why we chose X
+description/     URDF + MJCF (g1/ now)
+sim/             MuJoCo scenes, terrains
+ros2_ws/src/
+  bringup/       launch files, configs
+  interfaces/    custom messages
+  bridge/        sim ⇄ ROS 2
+  teleop/        gamepad/keyboard
+  policy/        runs trained policies
+training/        RL configs (w/ controls)
+tools/           scripts, motion files
+```
 
 ## Windows / macOS
 
@@ -10,9 +28,9 @@ Clone this repo (all our code lives here), then set up for your OS. New here? Th
    - **VS Code:** with the **Dev Containers** extension, open the repo folder → **Reopen in Container** → pick your OS.
    - **Terminal**, from the repo folder (`<os>` is `windows` or `mac`):
      ```bash
-     docker compose -f compose.<os>.yaml up -d --build   # start
-     docker compose -f compose.<os>.yaml exec dev bash   # open a shell (repeat for more)
-     docker compose -f compose.<os>.yaml down            # stop
+     docker compose -f docker/compose.<os>.yaml up -d --build   # start
+     docker compose -f docker/compose.<os>.yaml exec dev bash   # open a shell (repeat for more)
+     docker compose -f docker/compose.<os>.yaml down            # stop
      ```
 
 GUI windows open on your desktop (Windows) or at <http://localhost:8080/vnc.html> (Mac).
@@ -26,7 +44,7 @@ pip install --break-system-packages mujoco==3.14.0
 echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
 ```
 
-Keep your machine in sync with the `Dockerfile`.
+Keep your machine in sync with `docker/Dockerfile`.
 
 ## Check it works
 
