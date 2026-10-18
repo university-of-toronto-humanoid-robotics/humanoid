@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build image
+      run: docker build -t humanoid-dev .
+    - name: Check ROS and MuJoCo
+      run: docker run --rm humanoid-dev python3 -c "import rclpy, mujoco, os; print('ROS', os.environ['ROS_DISTRO'], '| MuJoCo', mujoco.__version__)"
