@@ -2,6 +2,8 @@
 
 Clone this repo (all our code lives here), then set up for your OS. New here? Then do the [onboarding task](docs/onboarding/README.md).
 
+**Want to walk the G1 robot right away? → [training/README.md](training/README.md)**
+
 ## Structure
 
 ```
@@ -16,7 +18,7 @@ ros2_ws/src/
   bridge/        sim ⇄ ROS 2
   teleop/        gamepad/keyboard
   policy/        runs trained policies
-training/        RL configs (w/ controls)
+training/        RL: Unitree's code (submodule) + our trained models
 tools/           scripts, motion files
 ```
 

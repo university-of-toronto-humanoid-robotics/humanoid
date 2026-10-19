@@ -1,0 +1,4 @@
+[submodule "training/unitree_rl_mjlab"]
+	path = training/unitree_rl_mjlab
+	url = https://github.com/unitreerobotics/unitree_rl_mjlab.git
+	ignore = untracked
