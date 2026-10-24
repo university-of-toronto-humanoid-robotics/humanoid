@@ -16,6 +16,7 @@ ros2_ws/src/
   bridge/        sim ⇄ ROS 2
   teleop/        gamepad/keyboard
   policy/        runs trained policies
+  perception/    SLAM (vendored fast_lio, livox driver)
 training/        RL configs (w/ controls)
 tools/           scripts, motion files
 ```
@@ -42,6 +43,13 @@ With [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Deb
 ```bash
 pip install --break-system-packages mujoco==3.14.0
 echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+
+# perception deps (fast_lio, livox_ros_driver2)
+sudo apt install ros-jazzy-pcl-ros libapr1-dev libaprutil1-dev
+git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 && cd /tmp/Livox-SDK2
+git checkout c0796f04c143143899c87a773d9f6b7136453c0b
+cmake -B build -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build -j
+sudo cmake --install build && cd - && rm -rf /tmp/Livox-SDK2
 ```
 
 Keep your machine in sync with `docker/Dockerfile`.
