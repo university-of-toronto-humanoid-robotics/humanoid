@@ -1,3 +1,10 @@
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
+
+# Competition CAD (downloaded by tools/cad/fetch_testbed.py, too big for git)
+sim/competition/cad/
+__pycache__/
+
+# Training runs from training/scripts/ (checkpoints, tensorboard logs)
+training/logs/

@@ -12,6 +12,7 @@ docs/            onboarding, architecture
   decisions/     why we chose X
 description/     URDF + MJCF (g1/ now)
 sim/             MuJoCo scenes, terrains
+  competition/   the competition course, built from the organizers' CAD
 ros2_ws/src/
   bringup/       launch files, configs
   interfaces/    custom messages
