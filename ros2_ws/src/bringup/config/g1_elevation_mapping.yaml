@@ -1,0 +1,32 @@
+# G1 overrides for elevation_mapping_cupy. Loaded after its core_param.yaml, so only changed values live here.
+/elevation_mapping_node:
+  ros__parameters:
+    # odom = z-up world (published in perception.launch.py, parent of FAST-LIO's camera_init)
+    # body = Mid-360 IMU, moved by FAST-LIO
+    map_frame: 'odom'
+    base_frame: 'body'
+    corrected_map_frame: 'odom'
+
+    resolution: 0.05            # m per cell
+    map_length: 5.0             # m, square map centred on base_frame
+    max_ray_length: 5.0         # m, no point tracing rays past the map edge
+
+    # The initializer fills a flat square at base_frame's height. base_frame is the LiDAR (head height),
+    # not the feet, so it would create a fake floor at head height.
+    use_initializer_at_start: false
+    initialize_frame_id: ['body']
+
+    subscribers:
+      mid360:
+        topic_name: '/cloud_registered_body'   # FAST-LIO scan in the sensor frame (cupy's noise model expects that)
+        data_type: pointcloud
+
+    publishers:
+      elevation_map_raw:
+        layers: ['elevation', 'traversability', 'variance']
+        basic_layers: ['elevation']
+        fps: 5.0
+      elevation_map_filter:
+        layers: ['min_filter', 'smooth', 'inpaint', 'elevation']
+        basic_layers: ['min_filter']
+        fps: 3.0
