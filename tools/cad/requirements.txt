@@ -1,0 +1,9 @@
+# Only needed to rebuild the course from the CAD (tools/cad/build_course.py).
+# Viewing and checking the course only needs mujoco + numpy.
+numpy
+scipy
+trimesh
+pycollada
+lxml
+matplotlib
+mujoco

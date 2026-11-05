@@ -1,0 +1,40 @@
+% ============================================================================
+% TDP, locomotion part (UTHR). Short version (~180 words) for a 2-page TDP.
+% Paste each block into the matching place in main.tex. References: locomotion.bib.
+% ============================================================================
+
+% --- \section{Introduction}: one sentence -----------------------------------
+For locomotion, a single learned policy walks the robot over the whole course,
+using a height map of the terrain built from the organizers' CAD.
+
+% --- \section{System Description} ------------------------------------------
+\subsection{Motion Planning and Whole-Body-Control}
+Locomotion is one reinforcement-learning policy (PPO~\cite{schulman2017ppo})
+that sends joint position targets to all 29 G1 joints at 50\,Hz. It is trained
+in GPU simulation with mjlab~\cite{mjlab}, starting from Unitree's open-source
+G1 tasks~\cite{unitree_rl_mjlab}. To these we add: a 1.6$\times$1.0\,m height
+map at 5\,cm around the robot, taken from a CAD-based map of the course placed
+by our localization; a pelvis-height command to crouch for floor-level buttons;
+random arm motions during training, so the legs stay balanced while the IK
+controller moves the arms; and training terrain sized to the measured course
+(20.3\,cm stairs, 10\,cm beams, 15$^\circ$ ramps), including a MuJoCo digital
+twin of the testbed. The operator steers it with walking-velocity and height
+commands.
+
+% --- \section{Competition Strategy}: mobility, one sentence -----------------
+We attempt all four mobility tasks with this policy; to press a button, the
+robot stops, crouches if needed, and the IK controller uses the arms while the
+policy keeps balance.
+
+% --- \section{Experiments}: one sentence -------------------------------------
+In simulation, the digital twin matches the CAD to within 1.3\,mm and a
+flat-ground walking policy works; the terrain-aware policy is in training.
+
+% --- Appendix, Software List: rows for Table~\ref{tab:SoftwareList} ----------
+%  \href{https://mujoco.org}{MuJoCo + Warp} & 3.5.0 & Apache-2.0 & GPU simulation \\
+%  \href{https://github.com/mujocolab/mjlab}{mjlab}~\cite{mjlab} & 1.2.0 & Apache-2.0 & RL training \\
+%  \href{https://github.com/unitreerobotics/unitree_rl_mjlab}{unitree\_rl\_mjlab}~\cite{unitree_rl_mjlab} & 1425b15 & Apache-2.0 & G1 model, base task \\
+%  \href{https://github.com/leggedrobotics/rsl_rl}{RSL-RL} & 5.0.1 & BSD-3 & PPO \\
+
+% --- Appendix, Team members: one line ----------------------------------------
+% <Name>: locomotion policy, training, and digital twin.

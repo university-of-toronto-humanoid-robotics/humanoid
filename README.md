@@ -2,6 +2,8 @@
 
 Clone this repo (all our code lives here), then set up for your OS. New here? Then do the [onboarding task](docs/onboarding/README.md).
 
+**Want to walk the G1 robot right away? → [training/README.md](training/README.md)**
+
 ## Structure
 
 ```
@@ -10,6 +12,7 @@ docs/            onboarding, architecture
   decisions/     why we chose X
 description/     URDF + MJCF (g1/ now)
 sim/             MuJoCo scenes, terrains
+  competition/   the competition course, built from the organizers' CAD
 ros2_ws/src/
   bringup/       launch files, configs
   interfaces/    custom messages
@@ -17,7 +20,7 @@ ros2_ws/src/
   teleop/        gamepad/keyboard
   policy/        runs trained policies
   perception/    SLAM (vendored fast_lio, livox driver)
-training/        RL configs (w/ controls)
+training/        RL: Unitree's code (submodule) + our trained models
 tools/           scripts, motion files
 ```
 

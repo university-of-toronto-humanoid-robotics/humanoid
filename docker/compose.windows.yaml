@@ -3,14 +3,25 @@ services:
   dev:
     build: .
     image: humanoid-dev
+    gpus: all
+    ports:
+      - "8080:8080" # mjlab's browser viewer (viser)
+      - "6006:6006" # TensorBoard training curves
     volumes:
       - ..:/workspaces/humanoid
       - /run/desktop/mnt/host/wslg/.X11-unix:/tmp/.X11-unix
       - /run/desktop/mnt/host/wslg:/mnt/wslg
+      - cache:/root/.cache              # compiled GPU kernels (warp), pip, etc.
+      - demo-cache:/tmp/mjlab_cache     # mjlab demo's downloaded policy + motion
     environment:
       DISPLAY: ":0"
       WAYLAND_DISPLAY: wayland-0
       XDG_RUNTIME_DIR: /mnt/wslg/runtime-dir
+      PYTHONPATH: /workspaces/humanoid/training/unitree_rl_mjlab # lets Unitree's scripts import their tasks
     working_dir: /workspaces/humanoid
     stdin_open: true
     tty: true
+
+volumes:
+  cache:
+  demo-cache:
