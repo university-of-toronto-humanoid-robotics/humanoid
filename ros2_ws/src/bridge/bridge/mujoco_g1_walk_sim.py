@@ -239,7 +239,7 @@ class G1WalkSim(Node):
         self.scene = self.declare_parameter('scene', find_in_repo('sim/g1_walk_scene.xml')).value
         description = self.declare_parameter(
             'description', find_in_repo('description/g1/g1_29dof_rev_1_0.xml')).value
-        policy = self.declare_parameter('policy', find_in_repo('.sim-deps/g1_walk/model_12400.pt')).value
+        policy = self.declare_parameter('policy', find_in_repo('training/models/g1_walk/model_12400.pt')).value
         self.viewer = self.declare_parameter('viewer', True).value
         self.duration = self.declare_parameter('duration', 180.0).value
         self.hold = self.declare_parameter('hold', 3.0).value
@@ -248,8 +248,8 @@ class G1WalkSim(Node):
         self.rng = np.random.default_rng(self.declare_parameter('seed', 0).value)
         if not Path(policy).is_file():
             raise FileNotFoundError(
-                f'No walking policy at "{policy}". From the repo root: mkdir -p .sim-deps/g1_walk && git cat-file '
-                'blob origin/competition:training/models/g1_walk/model_12400.pt > .sim-deps/g1_walk/model_12400.pt')
+                f'No walking policy at "{policy}". Build with --symlink-install so the default '
+                'training/models/g1_walk/model_12400.pt is found, or pass -p policy:=<path to a .pt checkpoint>')
 
         self.model = build_model(self.scene, description)
         self.data = mujoco.MjData(self.model)
