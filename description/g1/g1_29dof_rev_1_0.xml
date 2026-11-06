@@ -143,6 +143,9 @@
             <geom pos="0.0039635 0 -0.044" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.2 0.2 0.2 1" mesh="head_link"/>
             <geom pos="0.0039635 0 -0.044" type="mesh" rgba="0.2 0.2 0.2 1" mesh="head_link"/>
             <site name="imu_in_torso" size="0.01" pos="-0.03959 -0.00224 0.14792"/>
+            <!-- Mid-360, pose from mid360_joint in the URDF. mid360_imu is its built-in IMU (Livox: 11, 23.29, -44.12 mm in the LiDAR frame). -->
+            <site name="mid360" size="0.01" pos="0.0002835 0.00003 0.428434" quat="0 0.99967335 0 -0.02555756"/>
+            <site name="mid360_imu" size="0.01" pos="0.0135236 -0.02326 0.4719343" quat="0 0.99967335 0 -0.02555756"/>
             <body name="left_shoulder_pitch_link" pos="0.0039563 0.10022 0.24778" quat="0.990264 0.139201 1.38722e-05 -9.86868e-05">
               <inertial pos="0 0.035892 -0.011628" quat="0.654152 0.0130458 -0.326267 0.68225" mass="0.718" diaginertia="0.000465864 0.000432842 0.000406394"/>
               <joint name="left_shoulder_pitch_joint" pos="0 0 0" axis="0 1 0" range="-3.0892 2.6704" actuatorfrcrange="-25 25"/>
@@ -272,6 +275,8 @@
     <accelerometer name="imu-torso-linear-acceleration" site="imu_in_torso" noise="1e-2" cutoff="157"/>
     <gyro name="imu-pelvis-angular-velocity" site="imu_in_pelvis" noise="5e-4" cutoff="34.9"/>
     <accelerometer name="imu-pelvis-linear-acceleration" site="imu_in_pelvis" noise="1e-2" cutoff="157"/>
+    <gyro name="mid360-imu-angular-velocity" site="mid360_imu" noise="5e-4"/>
+    <accelerometer name="mid360-imu-linear-acceleration" site="mid360_imu" noise="1e-2"/>
   </sensor>
 
 
