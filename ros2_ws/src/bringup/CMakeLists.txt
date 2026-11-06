@@ -8,4 +8,9 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(
+  DIRECTORY ../../../description/g1
+  DESTINATION share/${PROJECT_NAME}/description
+)
+
 ament_package()

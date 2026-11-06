@@ -77,3 +77,20 @@ ros2 launch bringup perception.launch.py                  # on the G1
 ros2 launch bringup perception.launch.py use_sim_time:=true lidar_upside_down:=false   # with an upright-LiDAR bag
 ros2 bag play <bag> --clock                               # second terminal
 ```
+
+## LiDAR simulation (MuJoCo + simulated Mid-360)
+
+The G1 follows a scripted path (no physics or walking yet) and FAST-LIO's error against the true pose is printed at the end. NVIDIA GPU only. Build with `--symlink-install`, or pass `-p scene:=<path to sim/g1_lidar_scene.xml>`.
+
+```bash
+pip install --no-deps --target .sim-deps mujoco-lidar==0.3.5 warp-lang==1.12.0   # then add .sim-deps to PYTHONPATH
+ros2 launch bringup perception.launch.py use_sim_time:=true
+ros2 run bridge mujoco_mid360_sim                         # second terminal
+```
+
+To walk a route with physics instead, using the competition branch's flat walking policy (no checkout needed):
+
+```bash
+mkdir -p .sim-deps/g1_walk && git cat-file blob origin/competition:training/models/g1_walk/model_12400.pt > .sim-deps/g1_walk/model_12400.pt
+ros2 run bridge mujoco_g1_walk_sim                        # instead of mujoco_mid360_sim
+```
