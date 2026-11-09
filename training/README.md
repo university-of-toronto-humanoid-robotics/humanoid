@@ -1,5 +1,10 @@
 # Train and run the G1
 
+For GPU training in Google Colab without Docker, use
+[notebooks/train_colab.ipynb](notebooks/train_colab.ipynb). It defaults to
+G1-Flat-HeightMap, lets you choose parallel environment and iteration counts,
+and saves checkpoints and logs directly to Google Drive.
+
 ## Quick start (copy, paste)
 
 **1. Turn on the container.** Docker Desktop must be running. In your `humanoid` folder:
