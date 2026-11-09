@@ -13,6 +13,9 @@ Changes from Unitree-G1-Rough:
     instead of the policy (as if IK had taken over); the policy is told when
     (actions.py). Posture rewards ignore the arms then.
 Everything else (rewards, gains, randomization, PPO) is Unitree's.
+
+G1-Flat-HeightMap adds only the flattened competition scan to Unitree-G1-Flat,
+keeping its original walking setup without crouch commands or arm overrides.
 """
 
 from __future__ import annotations
@@ -30,7 +33,10 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
-from src.tasks.velocity.config.g1.env_cfgs import unitree_g1_rough_env_cfg
+from src.tasks.velocity.config.g1.env_cfgs import (
+  unitree_g1_flat_env_cfg,
+  unitree_g1_rough_env_cfg,
+)
 from src.tasks.velocity.config.g1.rl_cfg import unitree_g1_ppo_runner_cfg
 
 from . import mdp
@@ -60,6 +66,25 @@ SKILLS_FULL = int(os.environ.get("G1_COMP_SKILLS_FULL", 2000))
 # PPO's initial action noise (Unitree: 1.0). With 29 joints and Unitree's action
 # smoothness penalty, 1.0 made surviving cost more than falling early in training.
 INIT_NOISE_STD = 0.5
+
+
+def g1_flat_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Unitree's flat walking task with a flattened 693-point terrain scan.
+
+  Appends the scan to each group's original vector: 791 actor observations and
+  806 critic observations. All other flat-ground settings are inherited.
+  """
+  cfg = unitree_g1_flat_env_cfg(play=play)
+  cfg.scene.sensors = (cfg.scene.sensors or ()) + (terrain_scan_cfg(),)
+
+  for group, noise in (("actor", Unoise(n_min=-SCAN_NOISE, n_max=SCAN_NOISE)), ("critic", None)):
+    cfg.observations[group].terms["height_scan"] = ObservationTermCfg(
+      func=envs_mdp.height_scan,
+      params={"sensor_name": "terrain_scan"},
+      noise=noise,
+      clip=SCAN_CLIP,
+    )
+  return cfg
 
 
 def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -209,6 +234,13 @@ def g1_comp_crouch_test_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.sim.contact_sensor_maxmatch = 64
   cfg.commands["twist"].rel_standing_envs = 0.6
   cfg.commands["base_height"].crouch_prob = 0.8
+  return cfg
+
+
+def g1_flat_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Original Unitree flat MLP/PPO settings, with a separate log directory."""
+  cfg = unitree_g1_ppo_runner_cfg()
+  cfg.experiment_name = "g1_flat_heightmap"
   return cfg
 
 
