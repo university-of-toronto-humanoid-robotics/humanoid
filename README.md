@@ -4,6 +4,8 @@ Clone this repo (all our code lives here), then set up for your OS. New here? Th
 
 **Want to walk the G1 robot right away? → [training/README.md](training/README.md)**
 
+**Developing natively on Apple Silicon? → [docs/native-macos.md](docs/native-macos.md)**
+
 ## Structure
 
 ```
