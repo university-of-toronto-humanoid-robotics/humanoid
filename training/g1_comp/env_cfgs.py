@@ -95,6 +95,8 @@ def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   gen.curriculum = not play
   if play:
     gen.num_rows, gen.num_cols, gen.border_width = 5, 5, 10.0
+    # The assembled terrain can exceed Unitree's 48-contact buffer at startup.
+    cfg.sim.nconmax = 128
   assert cfg.scene.terrain is not None
   cfg.scene.terrain.terrain_generator = gen
 
