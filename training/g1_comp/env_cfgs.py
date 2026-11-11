@@ -220,6 +220,7 @@ def g1_rough_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   clearance.func = mdp.feet_clearance_terrain
   clearance.params = {**clearance.params, "sensor_names": FOOT_SENSOR_NAMES}
   cfg.rewards["track_linear_velocity"].weight = 5.0
+  cfg.rewards["track_angular_velocity"].weight = 5.0
   return cfg
 
 
