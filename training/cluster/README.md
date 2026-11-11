@@ -25,11 +25,13 @@ Then submit. Start with a 30-iteration test job, then the real run:
 ```bash
 cd ~/humanoid
 SMOKE=1 sbatch --time=0:30:00 training/cluster/train.sbatch
-sbatch training/cluster/train.sbatch                                 # G1-Comp-Rough, 4096 robots, 10k iterations
-TASK=G1-Comp-Course ITERATIONS=3000 sbatch training/cluster/train.sbatch
+sbatch training/cluster/train.sbatch                                 # the base model: Flat, 4096 robots, 3,000 iterations
+TASK=Open FROM=$SCRATCH/humanoid_runs/logs/rsl_rl/flat/<folder>/model_<N>.pt ITERATIONS=8000 sbatch training/cluster/train.sbatch   # the generalist
+TASK=Competition FROM=$SCRATCH/humanoid_runs/logs/rsl_rl/open/<folder>/model_<N>.pt ITERATIONS=1000 sbatch training/cluster/train.sbatch
 RESUME_RUN=<run folder> sbatch training/cluster/train.sbatch          # continue a run
-SKILLS_START=300 SKILLS_FULL=1500 sbatch training/cluster/train.sbatch # bring crouch/arms in sooner
 ```
+
+`TASK` is any task name from [`../README.md`](../README.md#tasks). `SKILLS_START`, `SKILLS_FULL` and `ASSIST` only affect the older `G1-Comp-*` tasks.
 
 - **Check:** `squeue -u $USER` shows the job, and `tail -f g1-comp-<jobid>.out` shows its output.
 - **Results:** checkpoints go to `$SCRATCH/humanoid_runs/logs/rsl_rl/<experiment>/<date>_<jobid>/` every 100 iterations.

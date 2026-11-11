@@ -22,6 +22,14 @@ SCAN_FORWARD = 0.3  # m; grid center ahead of the pelvis: 0.5 m behind to 1.1 m 
 SCAN_LIFT = 2.0  # m; rays start this far above the pelvis
 TERRAIN_GROUPS = (0,)  # terrain geoms; robot visuals are group 2, robot collisions group 3
 FOOT_SENSOR_NAMES = ("left_foot_ground", "right_foot_ground")
+FOOT_PATCH_SIZE = (0.2, 0.08)  # m, along x across; covers the sole (foot site is at its center)
+FOOT_PATCH_RESOLUTION = 0.04  # m -> 6 x 3 rays
+
+
+def grid_shape(size: tuple[float, float], resolution: float) -> tuple[int, int]:
+  """(rows, columns) of a grid pattern's rays = (points across, points along).
+  Rays are ordered row by row (mjlab's meshgrid with indexing="xy")."""
+  return round(size[1] / resolution) + 1, round(size[0] / resolution) + 1
 
 
 @dataclass
@@ -64,7 +72,7 @@ def foot_ground_sensor_cfgs() -> tuple[RayCastSensorCfg, ...]:
       name=name,
       frame=ObjRef(type="site", name=f"{side}_foot", entity="robot"),
       ray_alignment="yaw",
-      pattern=RaisedGridPatternCfg(size=(0.2, 0.08), resolution=0.04, lift=0.5),
+      pattern=RaisedGridPatternCfg(size=FOOT_PATCH_SIZE, resolution=FOOT_PATCH_RESOLUTION, lift=0.5),
       max_distance=3.0,
       exclude_parent_body=True,
       include_geom_groups=TERRAIN_GROUPS,

@@ -12,16 +12,24 @@ Changes from Unitree-G1-Rough:
   - Arm override: about 30% of the time the arms follow a smooth random motion
     instead of the policy (as if IK had taken over); the policy is told when
     (actions.py). Posture rewards ignore the arms then.
-Everything else (rewards, gains, randomization, PPO) is Unitree's.
+  - Sim-to-real (each backed by a paper; see training/README.md):
+      map noise, delay and blinks on the policy's scan (map_noise.py);
+      optional assistive upward force (off by default); mirror augmentation in PPO
+      (symmetry.py); 0-30 ms command delay and +/-10% motor gains; a slightly
+      stronger torso-wobble penalty; unsafe-stepping penalties (edge, stumble).
+Everything else (rewards, randomization, PPO settings) is Unitree's.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import os
 
+from mjlab.actuator import DelayedActuatorCfg
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as envs_mdp
+from mjlab.envs.mdp import dr
 from mjlab.managers.curriculum_manager import CurriculumTermCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg
@@ -29,17 +37,25 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
-from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from src.tasks.velocity.config.g1.env_cfgs import unitree_g1_rough_env_cfg
 from src.tasks.velocity.config.g1.rl_cfg import unitree_g1_ppo_runner_cfg
 
 from . import mdp
 from .actions import ArmOverrideJointPositionActionCfg
 from .commands import BaseHeightCommandCfg
-from .sensors import FOOT_SENSOR_NAMES, foot_ground_sensor_cfgs, terrain_scan_cfg
+from .map_noise import MapNoiseCfg, noisy_height_scan
+from .sensors import (
+  FOOT_PATCH_RESOLUTION,
+  FOOT_PATCH_SIZE,
+  FOOT_SENSOR_NAMES,
+  SCAN_RESOLUTION,
+  SCAN_SIZE,
+  foot_ground_sensor_cfgs,
+  grid_shape,
+  terrain_scan_cfg,
+)
 from .terrains import comp_rough_terrains_cfg, course_terrains_cfg
 
-SCAN_NOISE = 0.02  # m, uniform noise on the policy's scan (we assume a near-perfect CAD map)
 # The scan reads "pelvis height above the cell". Below -1 m (ground over 1.8 m above
 # the feet) means "too tall to ever climb"; above 2 m means "very deep drop".
 SCAN_CLIP = (-1.0, 2.0)
@@ -61,6 +77,53 @@ SKILLS_FULL = int(os.environ.get("G1_COMP_SKILLS_FULL", 2000))
 # smoothness penalty, 1.0 made surviving cost more than falling early in training.
 INIT_NOISE_STD = 0.5
 
+# --- Sim-to-real features (papers and pages: training/README.md) ---------------
+# What the real SLAM map gets wrong, applied to the policy's scan (map_noise.py):
+# +/-2 cm (xy) and +/-3 cm (z) per-episode shift, +/-3 cm per-point noise, 2% missing
+# cells, 0-60 ms delay, and a 0.1-0.3 s blink about every 20 s.
+MAP_NOISE = MapNoiseCfg()
+# Optional upward force carrying this share of the robot's weight while the robots'
+# mean terrain level is 0, fading to nothing at ASSIST_CUTOFF_LEVEL (Watch Your Step
+# uses 0.5). Training on G1-Comp-Rough only. Off by default: on a 512-robot run the
+# robots never left level 0, so it stayed at 50% and they fell without it. Turn it
+# on with G1_COMP_ASSIST=0.5 to compare (e.g. on the cluster).
+ASSIST_MAX_SHARE = float(os.environ.get("G1_COMP_ASSIST", 0.0))
+ASSIST_CUTOFF_LEVEL = 4.0
+# Conservative: time from a command to the motors, in 5 ms physics steps (0-30 ms,
+# drawn per episode), and a scale on each joint's PD gains (drawn per episode).
+COMMAND_DELAY_STEPS = (0, 6)
+PD_GAIN_SCALE = (0.9, 1.1)
+# Conservative: torso tilt-rate penalty (Unitree: -0.05). The LiDAR is in the head.
+TORSO_ANG_VEL_WEIGHT = -0.1
+# Unsafe stepping (small, so climbing stairs still pays): a foot on the ground with
+# a step edge (> EDGE_HEIGHT between neighbouring points) under its sole, and a foot
+# pushed sideways by the ground (a toe hitting a riser). Per foot, per step.
+# The edge patch covers exactly the sole, so on 24 cm treads the foot must sit within
+# about +/-1.6 cm of the tread centre: EDGE_WEIGHT is kept small so stalling at the
+# stairs never pays more than climbing.
+EDGE_HEIGHT = 0.05
+EDGE_WEIGHT = -0.2
+STUMBLE_WEIGHT = -0.3
+
+
+def _with_command_delay(cfg: ManagerBasedRlEnvCfg) -> None:
+  """Wrap the robot's actuators so their position targets arrive late.
+  The lag is set per episode by the "command_delay" event."""
+  robot = cfg.scene.entities["robot"]
+  assert robot.articulation is not None
+  actuators = tuple(
+    a if isinstance(a, DelayedActuatorCfg) else DelayedActuatorCfg(
+      base_cfg=a,
+      delay_target="position",
+      delay_min_lag=COMMAND_DELAY_STEPS[0],
+      delay_max_lag=COMMAND_DELAY_STEPS[1],
+      delay_hold_prob=1.0,  # keep the episode's lag (set at reset)
+    )
+    for a in robot.articulation.actuators
+  )
+  # replace(): the articulation config is shared with Unitree's own tasks.
+  robot.articulation = dataclasses.replace(robot.articulation, actuators=actuators)
+
 
 def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg = unitree_g1_rough_env_cfg(play=play)
@@ -72,21 +135,40 @@ def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     gen.num_rows, gen.num_cols, gen.border_width = 5, 5, 10.0
   assert cfg.scene.terrain is not None
   cfg.scene.terrain.terrain_generator = gen
+  # Contacts allocated per robot. MuJoCo Warp checks this at startup against one
+  # robot at its default spot (x = y = 0), before the first reset. In play that spot
+  # is the middle of a random tile (rough ground: ~70 contacts), so play gets 128.
+  # Training keeps Unitree's 48: there it is a flat tile corner, and memory grows with
+  # it (128 needs ~2 GB more at 1500 robots, which an 8 GB GPU doesn't have).
+  if play:
+    cfg.sim.nconmax = 128
 
   # Sensors: our scan replaces Unitree's; add a ground patch under each foot.
   others = tuple(s for s in (cfg.scene.sensors or ()) if s.name != "terrain_scan")
   cfg.scene.sensors = (terrain_scan_cfg(), *foot_ground_sensor_cfgs(), *others)
 
-  # Observations: scan in meters, clipped; small noise for the policy only.
-  for group, noise in (("actor", Unoise(n_min=-SCAN_NOISE, n_max=SCAN_NOISE)), ("critic", None)):
-    cfg.observations[group].terms["height_scan"] = ObservationTermCfg(
-      func=envs_mdp.height_scan,
-      params={"sensor_name": "terrain_scan"},
-      noise=noise,
-      clip=SCAN_CLIP,
-    )
+  # Observations: scan in meters, clipped. The policy sees it with SLAM-like errors
+  # (off while playing, like Unitree's other observation noise); the critic clean.
+  cfg.observations["actor"].terms["height_scan"] = ObservationTermCfg(
+    func=noisy_height_scan,
+    params={
+      "sensor_name": "terrain_scan",
+      "grid_shape": grid_shape(SCAN_SIZE, SCAN_RESOLUTION),
+      "resolution": SCAN_RESOLUTION,
+      "noise": MAP_NOISE,
+      "corrupt": not play,
+    },
+    clip=SCAN_CLIP,
+  )
+  cfg.observations["critic"].terms["height_scan"] = ObservationTermCfg(
+    func=envs_mdp.height_scan, params={"sensor_name": "terrain_scan"}, clip=SCAN_CLIP
+  )
   cfg.observations["critic"].terms["foot_height"] = ObservationTermCfg(
     func=mdp.foot_clearance, params={"sensor_names": FOOT_SENSOR_NAMES}
+  )
+  # Same contact forces as Unitree's, in the robot's heading frame so they can be mirrored.
+  cfg.observations["critic"].terms["foot_contact_forces"] = ObservationTermCfg(
+    func=mdp.foot_contact_forces_yaw, params={"sensor_name": "feet_ground_contact"}
   )
 
   # Crouch command (after "twist": it reads the velocity command). It starts off,
@@ -159,6 +241,40 @@ def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       "asset_cfg": SceneEntityCfg("robot", site_names=FOOT_SITES),
     },
   )
+
+  # Sim-to-real: command delay and motor gains (drawn each episode; training only,
+  # like the map noise, so play.py and eval_policy.py show the nominal robot),
+  # and a steadier torso.
+  if not play:
+    _with_command_delay(cfg)
+    cfg.events["command_delay"] = EventTermCfg(
+      func=dr.sync_actuator_delays, mode="reset", params={"lag_range": COMMAND_DELAY_STEPS}
+    )
+    cfg.events["pd_gains"] = EventTermCfg(
+      func=dr.pd_gains, mode="reset", params={"kp_range": PD_GAIN_SCALE, "kd_range": PD_GAIN_SCALE}
+    )
+  cfg.rewards["body_ang_vel"].weight = TORSO_ANG_VEL_WEIGHT
+
+  # Unsafe stepping: on a step edge, or hitting a riser.
+  cfg.rewards["foot_on_edge"] = RewardTermCfg(
+    func=mdp.foot_on_edge,
+    weight=EDGE_WEIGHT,
+    params={
+      "sensor_names": FOOT_SENSOR_NAMES,
+      "patch_shape": grid_shape(FOOT_PATCH_SIZE, FOOT_PATCH_RESOLUTION),
+      "contact_sensor_name": "feet_ground_contact",
+      "edge_height": EDGE_HEIGHT,
+    },
+  )
+  cfg.rewards["foot_stumble"] = RewardTermCfg(
+    func=mdp.foot_stumble, weight=STUMBLE_WEIGHT, params={"contact_sensor_name": "feet_ground_contact"}
+  )
+
+  # Assistive upward force, only when turned on (it follows the terrain curriculum).
+  if not play and ASSIST_MAX_SHARE > 0:
+    assist = {"max_fraction": ASSIST_MAX_SHARE, "cutoff_level": ASSIST_CUTOFF_LEVEL}
+    cfg.events["assist_force"] = EventTermCfg(func=mdp.assist_force, mode="reset", params=assist)
+    cfg.curriculum["assist"] = CurriculumTermCfg(func=mdp.assist_force_log, params=assist)
   return cfg
 
 
@@ -167,13 +283,16 @@ def g1_comp_course_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg = g1_comp_rough_env_cfg(play=play)
   assert cfg.scene.terrain is not None
   cfg.scene.terrain.terrain_generator = course_terrains_cfg()
-  # More contacts allowed per robot than on rough terrain (48): walls, stair side
-  # panels, and before the first reset every robot starts in the middle of the ramps.
+  # More contacts per robot: walls, stair side panels, and before the first reset
+  # every robot starts in the middle of the ramps.
   cfg.sim.nconmax = 128
 
-  # One copy of the course: no terrain curriculum; spawn on the course's flat spots.
+  # One copy of the course: no terrain curriculum (so no assist force); spawn on
+  # the course's flat spots.
   cfg.curriculum.pop("terrain_levels", None)
   cfg.curriculum.pop("command_vel", None)
+  cfg.curriculum.pop("assist", None)
+  cfg.events.pop("assist_force", None)
   cfg.events.pop("randomize_terrain", None)
   cfg.events["reset_base"] = EventTermCfg(
     func=envs_mdp.reset_root_state_from_flat_patches,
@@ -189,6 +308,34 @@ def g1_comp_course_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   return cfg
 
 
+def _flat_ground(cfg: ManagerBasedRlEnvCfg) -> None:
+  """A flat floor instead of the terrain grid, with Unitree's flat-ground sim settings.
+  The height scan stays (it reads flat ground), so models keep the same inputs."""
+  assert cfg.scene.terrain is not None
+  cfg.scene.terrain.terrain_type = "plane"
+  cfg.scene.terrain.terrain_generator = None
+  cfg.events.pop("randomize_terrain", None)
+  cfg.curriculum.pop("terrain_levels", None)
+  cfg.curriculum.pop("assist", None)  # the assist force follows the terrain levels
+  cfg.events.pop("assist_force", None)
+  cfg.sim.njmax, cfg.sim.nconmax = 300, None
+  cfg.sim.mujoco.ccd_iterations = 50
+  cfg.sim.contact_sensor_maxmatch = 64
+
+
+def g1_comp_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Stage 1: learn to walk on flat ground. No crouching or arm override, and
+  Unitree's share of standing robots. Same inputs, outputs and sim-to-real
+  features as G1-Comp-Rough, so its model fine-tunes there (train.py --from)."""
+  cfg = g1_comp_rough_env_cfg(play=play)
+  _flat_ground(cfg)
+  cfg.curriculum.pop("skills", None)
+  cfg.commands["twist"].rel_standing_envs = 0.05
+  cfg.commands["base_height"].crouch_prob = 0.0
+  cfg.actions["joint_pos"].override_prob = 0.0
+  return cfg
+
+
 def g1_comp_crouch_test_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Quick check of crouching and arm override on a small GPU: flat ground, most
   robots standing, both skills on from the start. Same observations and actions
@@ -198,15 +345,13 @@ def g1_comp_crouch_test_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     rough = g1_comp_rough_env_cfg(play=False)
     cfg.episode_length_s = rough.episode_length_s
     cfg.observations["actor"].enable_corruption = True
+    cfg.observations["actor"].terms["height_scan"].params["corrupt"] = True
     cfg.events["push_robot"] = rough.events["push_robot"]
-  assert cfg.scene.terrain is not None
-  cfg.scene.terrain.terrain_type = "plane"
-  cfg.scene.terrain.terrain_generator = None
-  cfg.events.pop("randomize_terrain", None)
+    _with_command_delay(cfg)
+    cfg.events["command_delay"] = rough.events["command_delay"]
+    cfg.events["pd_gains"] = rough.events["pd_gains"]
+  _flat_ground(cfg)
   cfg.curriculum = {}
-  cfg.sim.njmax, cfg.sim.nconmax = 300, None  # Unitree's flat-ground settings
-  cfg.sim.mujoco.ccd_iterations = 50
-  cfg.sim.contact_sensor_maxmatch = 64
   cfg.commands["twist"].rel_standing_envs = 0.6
   cfg.commands["base_height"].crouch_prob = 0.8
   return cfg
@@ -216,4 +361,6 @@ def g1_comp_ppo_runner_cfg(experiment_name: str) -> RslRlOnPolicyRunnerCfg:
   cfg = unitree_g1_ppo_runner_cfg()
   cfg.experiment_name = experiment_name
   cfg.actor.distribution_cfg["init_std"] = INIT_NOISE_STD
+  # RSL-RL's PPO with mirror augmentation (symmetry.py). Same networks and files.
+  cfg.algorithm.class_name = "g1_comp.symmetry:MirrorPPO"
   return cfg

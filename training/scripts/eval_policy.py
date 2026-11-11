@@ -1,4 +1,4 @@
-"""Measure what a trained G1-Comp policy can do, on flat ground, with numbers.
+"""Measure what a trained policy can do, on flat ground, with numbers.
 
   1. Crouch: stand still and hold a series of commanded pelvis heights.
   2. The same while the arms move randomly (as if IK had taken over).
@@ -7,7 +7,7 @@
 For each it prints the height (or speed) reached and how many robots fell.
 From training/ inside the container:
 
-  python scripts/eval_policy.py --checkpoint logs/rsl_rl/g1_comp_rough/<date>/model_<N>.pt
+  python scripts/eval_policy.py --checkpoint logs/rsl_rl/flat/<date>/model_<N>.pt
 """
 
 import argparse
@@ -26,7 +26,8 @@ HOLD_S = 4.0  # seconds per commanded height; the last second is measured
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   parser.add_argument("--checkpoint", help="trained model_<N>.pt; leave out to test with zero actions")
-  parser.add_argument("--task", default="G1-Comp-Rough")
+  parser.add_argument("--task", default="Flat", help="the task the model was trained on (any new task; "
+                      "G1-Comp-Rough for the older models). The test itself is always on flat ground")
   parser.add_argument("--num-envs", type=int, default=32)
   args = parser.parse_args()
 
