@@ -110,9 +110,10 @@ Models from any `G1-Comp-*` task work on every `G1-Comp-*` task. `Unitree-G1-Fla
 `G1-Flat-HeightMap` and `G1-Rough-HeightMap` checkpoints work with each other,
 but not with `G1-Comp-*` or the original Unitree tasks. The rough height-map
 task measures critic foot height and the clearance reward relative to local
-ground, using the flat task's existing 0.10 m clearance target. Other walking
-rewards and PPO settings stay the same. Its observation dimensions and column
-order are unchanged, so the saved network and normalizer tensors load directly.
+ground, using the flat task's existing 0.10 m clearance target. Its linear
+velocity tracking reward has weight 5.0; other rewards and PPO settings stay
+the same. Its observation dimensions and column order are unchanged, so the
+saved network and normalizer tensors load directly.
 
 ### Saved models
 
