@@ -4,6 +4,9 @@ ros2_ws/log/
 
 .vscode/
 
+# macOS folder metadata
+.DS_Store
+
 # Competition CAD (downloaded by tools/cad/fetch_testbed.py, too big for git)
 sim/competition/cad/
 __pycache__/

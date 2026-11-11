@@ -5,6 +5,17 @@ For GPU training in Google Colab without Docker, use
 G1-Flat-HeightMap, lets you choose parallel environment and iteration counts,
 and saves checkpoints and logs directly to Google Drive.
 
+To continue the flat height-map policy on rough terrain, select
+`G1-Rough-HeightMap` in notebook cell 1. After mounting Drive, run cell 5, check
+**Start from checkpoint**, and choose the source environment folder, run, and
+exact `model_<N>.pt` file. These are read from
+`MyDrive/humanoid/logs/rsl_rl/<experiment>/<run>/`. Cell 6 trains the selected
+target task from that model; the source environment can differ from the target.
+Leave the checkbox off to train from scratch. Rerun cell 5 to refresh the list.
+Continuation restores weights, observation normalization, optimizer, and iteration
+counters. `ITERATIONS` is the number of additional updates. Outputs go to a new
+timestamped folder under the target experiment, with a new W&B/TensorBoard run.
+
 ## Quick start (copy, paste)
 
 **1. Turn on the container.** Docker Desktop must be running. In your `humanoid` folder:
@@ -88,12 +99,20 @@ A task is the world the robot is put in: the terrain, the commands it gets, and 
 
 | Task | World | Use it for |
 |---|---|---|
+| `G1-Flat-HeightMap` | Unitree flat walking with a flattened 693-point elevation map | Flat walking baseline; actor 791 inputs, critic 806 |
+| `G1-Rough-HeightMap` | Competition-style rough terrain, with the flat height-map observation order and joint actions | Continue the flat checkpoint without crouching or arm overrides; starts at terrain level 0 and promotes successful robots |
 | `G1-Comp-Rough` | Flat ground, slopes, rough ground, and stairs 5–23 cm high, getting harder as robots succeed. Walking first; crouching and arm motion phase in from iteration 500 to 2,000 | **The main one.** Trains the competition robot |
 | `G1-Comp-Course` | The competition course, from the organizers' CAD | Practise and test on the real course, after Rough |
 | `G1-Comp-Crouch-Test` | Flat, mostly standing still, crouching and arm motion from the start | Quick crouch check on a laptop. Never learns to walk |
 | `Unitree-G1-Flat` | Unitree's original flat walking, with no height map | The old walking demo models only |
 
 Models from any `G1-Comp-*` task work on every `G1-Comp-*` task. `Unitree-G1-Flat` models only work on `Unitree-G1-Flat`.
+`G1-Flat-HeightMap` and `G1-Rough-HeightMap` checkpoints work with each other,
+but not with `G1-Comp-*` or the original Unitree tasks. The rough height-map
+task measures critic foot height and the clearance reward relative to local
+ground, using the flat task's existing 0.10 m clearance target. Other walking
+rewards and PPO settings stay the same. Its observation dimensions and column
+order are unchanged, so the saved network and normalizer tensors load directly.
 
 ### Saved models
 
@@ -110,7 +129,7 @@ What's in `training/models/` now:
 | `models/g1_walk/model_<N>.pt` (N = 500 … 12400) | `Unitree-G1-Flat` | Unitree's flat walking demo. The early ones show how learning progresses |
 
 What a training run's folder holds:
-- `<experiment>` is `g1_comp_rough`, `g1_comp_course`, `g1_comp_crouch_test` or `g1_velocity`.
+- `<experiment>` is `g1_flat_heightmap`, `g1_rough_heightmap`, `g1_comp_rough`, `g1_comp_course`, `g1_comp_crouch_test` or `g1_velocity`.
 - `model_<N>.pt`: a saved model every 100 iterations, plus the last one. **This is what you watch or continue from.**
 - `policy.onnx`: the latest model, exported for the robot.
 - `params/`: every setting the run used.

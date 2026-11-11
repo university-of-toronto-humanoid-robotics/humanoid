@@ -16,6 +16,7 @@ Everything else (rewards, gains, randomization, PPO) is Unitree's.
 
 G1-Flat-HeightMap adds only the flattened competition scan to Unitree-G1-Flat,
 keeping its original walking setup without crouch commands or arm overrides.
+G1-Rough-HeightMap keeps that observation layout on competition-style terrain.
 """
 
 from __future__ import annotations
@@ -189,6 +190,38 @@ def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   return cfg
 
 
+def g1_rough_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Rough terrain for continuing a G1-Flat-HeightMap walking checkpoint.
+
+  Keeps all observation columns and the original joint actions. Critic foot
+  heights and the clearance reward use local ground rather than world z.
+  """
+  cfg = g1_flat_heightmap_env_cfg(play=play)
+  rough = unitree_g1_rough_env_cfg(play=play)
+  cfg.scene.terrain = rough.scene.terrain
+  cfg.sim = rough.sim
+  cfg.events = rough.events
+  cfg.curriculum = rough.curriculum
+  cfg.sim.nconmax = 128
+
+  gen = comp_rough_terrains_cfg()
+  gen.curriculum = not play
+  if play:
+    gen.num_rows, gen.num_cols, gen.border_width = 5, 5, 10.0
+  assert cfg.scene.terrain is not None
+  cfg.scene.terrain.terrain_generator = gen
+  # Start transfer runs on the easiest row; terrain_levels promotes successes.
+  cfg.scene.terrain.max_init_terrain_level = 0
+  cfg.scene.sensors = (cfg.scene.sensors or ()) + foot_ground_sensor_cfgs()
+  cfg.observations["critic"].terms["foot_height"] = ObservationTermCfg(
+    func=mdp.foot_clearance, params={"sensor_names": FOOT_SENSOR_NAMES}
+  )
+  clearance = cfg.rewards["foot_clearance"]
+  clearance.func = mdp.feet_clearance_terrain
+  clearance.params = {**clearance.params, "sensor_names": FOOT_SENSOR_NAMES}
+  return cfg
+
+
 def g1_comp_course_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """The same robot setup on the competition course, spawning anywhere along it."""
   cfg = g1_comp_rough_env_cfg(play=play)
@@ -243,6 +276,12 @@ def g1_flat_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   """Original Unitree flat MLP/PPO settings, with a separate log directory."""
   cfg = unitree_g1_ppo_runner_cfg()
   cfg.experiment_name = "g1_flat_heightmap"
+  return cfg
+
+
+def g1_rough_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = g1_flat_heightmap_ppo_runner_cfg()
+  cfg.experiment_name = "g1_rough_heightmap"
   return cfg
 
 
