@@ -1,0 +1,6 @@
+<mujoco model="g1_lidar_scene">
+  <!-- G1 in a walled room with obstacles and stairs, so LiDAR odometry has geometry to track. -->
+  <include file="../description/g1/g1_29dof_rev_1_0.xml"/>
+  <compiler meshdir="../description/g1/meshes"/>
+  <include file="lidar_room.xml"/>
+</mujoco>

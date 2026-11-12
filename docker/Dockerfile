@@ -18,6 +18,13 @@ RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git /tmp/Livox-SDK2 \
     && cmake --install /tmp/Livox-SDK2/build \
     && rm -rf /tmp/Livox-SDK2
 
+# MuJoCo LiDAR simulation (ros2_ws/src/bridge). mujoco-lidar only needs numpy, mujoco and warp at runtime,
+# so --no-deps stops pip replacing ROS's apt numpy. Without a GPU, warp traces rays on the CPU.
+# torch is the CPU build, only for reading the walking policy's checkpoint.
+RUN apt-get update && apt-get install -y python3-scipy && rm -rf /var/lib/apt/lists/*
+RUN pip install --break-system-packages --no-cache-dir --no-deps mujoco-lidar==0.3.5 warp-lang==1.12.0 \
+    && pip install --break-system-packages --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1
+
 # RL training (mjlab) gets its own venv so its pinned MuJoCo doesn't clash with the one above.
 # mjlab/mujoco-warp match unitree_rl_mjlab's setup.py. The rest are pinned because mjlab's
 # open ranges pull versions that break it (newer mujoco/warp), and it imports scipy without declaring it.

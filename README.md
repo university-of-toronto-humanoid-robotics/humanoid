@@ -77,3 +77,15 @@ ros2 launch bringup perception.launch.py                  # on the G1
 ros2 launch bringup perception.launch.py use_sim_time:=true lidar_upside_down:=false   # with an upright-LiDAR bag
 ros2 bag play <bag> --clock                               # second terminal
 ```
+
+## LiDAR simulation (MuJoCo + simulated Mid-360)
+
+The G1 follows a scripted path (no physics or walking yet) and FAST-LIO's error against the true pose is printed at the end. Elevation mapping needs an NVIDIA GPU. Build with `--symlink-install`, or pass `-p scene:=<path to sim/g1_lidar_scene.xml>`.
+
+The Docker image has the simulator's Python packages (`mujoco-lidar`, `warp-lang`, CPU `torch`). Natively, `pip install --no-deps --target .sim-deps mujoco-lidar==0.3.5 warp-lang==1.12.0` and add `.sim-deps` to `PYTHONPATH`, which leaves your other pins alone.
+
+```bash
+ros2 launch bringup perception.launch.py use_sim_time:=true
+ros2 run bridge mujoco_mid360_sim                         # second terminal
+ros2 run bridge mujoco_g1_walk_sim                        # or: physics, walking under training/models/g1_walk/model_12400.pt
+```
