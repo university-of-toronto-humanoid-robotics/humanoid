@@ -88,4 +88,9 @@ The Docker image has the simulator's Python packages (`mujoco-lidar`, `warp-lang
 ros2 launch bringup perception.launch.py use_sim_time:=true
 ros2 run bridge mujoco_mid360_sim                         # second terminal
 ros2 run bridge mujoco_g1_walk_sim                        # or: physics, walking under training/models/g1_walk/model_12400.pt
+ros2 run bridge mujoco_g1_walk_sim --ros-args -p scenario:=course_ramps   # the competition course's ramps
 ```
+
+`mujoco_g1_walk_sim` runs a scenario from `sim/scenarios/` (default `room_walk`): the scene, spawn pose, policy and motion script (waypoints or timed velocity commands). Copy one to make a new test.
+
+Scans have Mid-360-like noise by default (range, direction, dropout); `--ros-args -p noise:=false` gives ideal scans.

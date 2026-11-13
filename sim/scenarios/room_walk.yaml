@@ -1,0 +1,13 @@
+# The LiDAR room: a loop past the stairs and boxes, at least 1 m from obstacles.
+# Paths are relative to the repo root. Run: ros2 run bridge mujoco_g1_walk_sim --ros-args -p scenario:=room_walk
+scene: sim/g1_walk_scene.xml
+spawn: {x: 0.0, y: 0.0, yaw: 0.0}     # pelvis position (m) and heading (rad); its height comes from the ground
+duration: 180.0                        # s of sim time, at most
+policy:
+  type: rsl_rl_g1_flat                 # see bridge/walk_policy.py
+  checkpoint: training/models/g1_walk/model_12400.pt
+motion:
+  type: waypoints                      # or velocity: see bridge/motion.py
+  speed: 0.5                           # m/s
+  points: [[2.5, 0.0], [3.6, 2.5], [3.6, 5.5], [1.0, 7.5], [-3.0, 7.5], [-8.0, 7.0], [-8.5, 2.0],
+           [-8.5, -2.0], [-6.0, -5.0], [-2.0, -5.0], [2.0, -4.8], [1.5, -1.0], [0.0, 0.0]]

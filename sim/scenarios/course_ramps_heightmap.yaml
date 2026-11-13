@@ -1,0 +1,16 @@
+# The crossing ramps with a height-map policy: the team's G1-Rough-HeightMap walker (kartik/locomotion's
+# best_g1_rough_heightmap/model_5996.pt), trained on stairs, slopes up to 0.4 rad and bumps with a 693-point scan.
+# The scan comes from the true terrain, as in training; -p scan:=elevation_map feeds it the live elevation map.
+# It starts on the open deck facing +x: at course_ramps' spawn in the step-over section, the scan takes in the
+# lane wall, the door frame and the beams, which this policy never trained on, and it falls while standing.
+scene: sim/g1_course_scene.xml
+spawn: {x: 5.3, y: 4.55, yaw: 0.0}
+duration: 90.0
+policy:
+  type: rsl_rl_g1_heightmap
+  checkpoint: training/models/best_g1_rough_heightmap/model_5996.pt
+  scan: true_terrain                               # or elevation_map
+motion:
+  type: waypoints
+  speed: 0.4
+  points: [[7.6, 4.55], [7.6, 3.8], [6.6, 3.8], [6.6, 4.55], [5.4, 4.55]]

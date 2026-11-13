@@ -1,16 +1,13 @@
-"""G1 walking a route through the LiDAR room in MuJoCo under a trained policy, with a simulated Mid-360.
+"""G1 walking in MuJoCo under a trained policy, with a simulated Mid-360, set up by a scenario file.
 
-Like mujoco_mid360_sim, but with physics instead of a scripted pose: a flat-ground walking policy trained in
-mjlab (task Unitree-G1-Flat, an rsl_rl checkpoint) drives all 29 joints while the robot follows waypoints around
-the room, beside the stairs and boxes. The robot model, actuators, contacts and solver settings reproduce how
-mjlab built the robot it was trained on (unitree_rl_mjlab's g1_constants.py and velocity task), so the policy
-sees the same robot.
+Like mujoco_mid360_sim, but with physics instead of a scripted pose. A scenario (sim/scenarios/*.yaml) picks the
+scene, the spawn pose, the policy (bridge/walk_policy.py) and the motion script that commands it
+(bridge/motion.py). The robot is built the way mjlab built the one the policy was trained on (bridge/g1_model.py).
 
 Publishes the same topics as mujoco_mid360_sim (/clock, /livox/imu, /livox/lidar, /joint_states and
-/ground_truth/odom) and reports FAST-LIO's error at the end. Navigation uses the true pose.
+/ground_truth/odom) and reports FAST-LIO's error at the end. Motion scripts use the true pose.
 """
 from pathlib import Path
-import re
 import time
 
 from livox_ros_driver2.msg import CustomMsg
@@ -22,247 +19,98 @@ from rclpy.node import Node
 from rosgraph_msgs.msg import Clock
 from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import Imu, JointState
+import yaml
 
+from bridge import g1_model
+from bridge.height_scan import ElevationMapScan, TrueTerrainScan
+from bridge.motion import make_motion
 from bridge.mujoco_mid360_sim import FRAME_SLICES, IMU_DT, SLICE_TICKS, STAMP_OFFSET, Mid360Sim, to_stamp
+from bridge.walk_policy import make_policy
 
-DECIMATION = 4              # physics steps per policy step: 50 Hz policy, as in training
-POLICY_DT = DECIMATION * IMU_DT
-GAIT_PERIOD = 0.6           # s, the policy's phase clock
-SETTLE = 1.0                # s of standing before sim time starts, so the drop onto the floor isn't recorded
-FALLEN_HEIGHT = 0.45        # m, pelvis height below which the robot has fallen
-
-# Actuators, from unitree_rl_mjlab's g1_constants.py: each joint is a <position> actuator whose gains come from
-# its motor's reflected inertia (armature), a 10 Hz natural frequency and a damping ratio of 2.
-NATURAL_FREQ = 10 * 2.0 * 3.1415926535
-DAMPING_RATIO = 2.0
+SETTLE = 1.0                # s of standing before sim time starts, so the drop onto the ground isn't recorded
+FALLEN_HEIGHT = 0.45        # m, pelvis height above the ground below it, under which the robot has fallen
 
 
-def two_stage_planetary_armature(rotor, gears):
-    return rotor[0] * (gears[1] * gears[2]) ** 2 + rotor[1] * gears[2] ** 2 + rotor[2]
-
-
-ARMATURE_5020 = two_stage_planetary_armature((0.139e-4, 0.017e-4, 0.169e-4), (1, 1 + 46 / 18, 1 + 56 / 16))
-ARMATURE_7520_14 = two_stage_planetary_armature((0.489e-4, 0.098e-4, 0.533e-4), (1, 4.5, 1 + 48 / 22))
-ARMATURE_7520_22 = two_stage_planetary_armature((0.489e-4, 0.109e-4, 0.738e-4), (1, 4.5, 5))
-ARMATURE_4010 = two_stage_planetary_armature((0.068e-4, 0.0, 0.0), (1, 5, 5))
-MOTORS = (  # (joint names, armature, effort limit in N m). Waist pitch/roll and ankles are two 5020s each.
-    (r'.*_(elbow|shoulder_pitch|shoulder_roll|shoulder_yaw|wrist_roll)_joint', ARMATURE_5020, 25.0),
-    (r'.*_hip_pitch_joint|.*_hip_yaw_joint|waist_yaw_joint', ARMATURE_7520_14, 88.0),
-    (r'.*_hip_roll_joint|.*_knee_joint', ARMATURE_7520_22, 139.0),
-    (r'.*_wrist_(pitch|yaw)_joint', ARMATURE_4010, 5.0),
-    (r'waist_(pitch|roll)_joint|.*_ankle_(pitch|roll)_joint', 2 * ARMATURE_5020, 50.0),
-)
-# The standing pose the policy's actions are offsets from (HOME_KEYFRAME); other joints are 0.
-DEFAULT_POSE = {
-    r'.*_hip_pitch_joint': -0.1, r'.*_knee_joint': 0.3, r'.*_ankle_pitch_joint': -0.2,
-    r'.*_shoulder_pitch_joint': 0.35, r'.*_elbow_joint': 0.87,
-    r'left_shoulder_roll_joint': 0.18, r'right_shoulder_roll_joint': -0.18,
-}
-START_HEIGHT = 0.8
-FOOT_GEOM = r'(left|right)_foot[1-7]_collision'
-
-# Waypoints (x, y) in the room, starting and ending at the origin, at least 1 m from obstacles.
-ROUTE = ((2.5, 0.0), (3.6, 2.5), (3.6, 5.5), (1.0, 7.5), (-3.0, 7.5), (-8.0, 7.0), (-8.5, 2.0),
-         (-8.5, -2.0), (-6.0, -5.0), (-2.0, -5.0), (2.0, -4.8), (1.5, -1.0), (0.0, 0.0))
-
-
-def find_in_repo(relative):
+def repo_root():
     for parent in Path(__file__).resolve().parents:
-        if (parent / relative).exists():
-            return str(parent / relative)
-    return ''
+        if (parent / 'sim' / 'scenarios').is_dir():
+            return parent
+    raise FileNotFoundError('No sim/scenarios above this file: build with --symlink-install')
 
 
-def match_one(table, name):
-    hits = [value for pattern, *value in table if re.fullmatch(pattern, name)]
-    if len(hits) != 1:
-        raise ValueError(f'{name} matches {len(hits)} entries, expected 1')
-    return hits[0]
+def in_repo(path):
+    path = Path(path)
+    return str(path if path.is_absolute() else repo_root() / path)
 
 
-def build_model(scene, description):
-    """The scene's G1 set up the way mjlab sets it up for training, plus the Mid-360 from our description."""
-    spec = mujoco.MjSpec.from_file(scene)
-    robot = spec.body('pelvis')
-
-    # Position actuators without control limits, force-limited to the motor's effort limit.
-    for joint in spec.joints:
-        if joint.type != mujoco.mjtJoint.mjJNT_HINGE:
-            continue
-        armature, effort = match_one(MOTORS, joint.name)
-        stiffness = armature * NATURAL_FREQ**2
-        damping = 2.0 * DAMPING_RATIO * armature * NATURAL_FREQ
-        actuator = spec.add_actuator(name=joint.name, target=joint.name)
-        actuator.trntype = mujoco.mjtTrn.mjTRN_JOINT
-        actuator.dyntype = mujoco.mjtDyn.mjDYN_NONE
-        actuator.gaintype = mujoco.mjtGain.mjGAIN_FIXED
-        actuator.biastype = mujoco.mjtBias.mjBIAS_AFFINE
-        actuator.gainprm[0] = stiffness
-        actuator.biasprm[1] = -stiffness
-        actuator.biasprm[2] = -damping
-        actuator.inheritrange = 0.0
-        actuator.ctrllimited = False
-        actuator.forcelimited = True
-        actuator.forcerange[:] = [-effort, effort]
-        joint.armature = armature
-        joint.frictionloss = 0.0
-
-    # Collisions as in mjlab's FULL_COLLISION: only the *_collision capsules, self-collisions included.
-    for geom in robot.find_all(mujoco.mjtObj.mjOBJ_GEOM):
-        if re.match(r'.*_collision', geom.name):
-            foot = re.match(FOOT_GEOM, geom.name) is not None
-            geom.contype, geom.conaffinity = 1, 1
-            geom.condim = 3 if foot else 1
-            geom.priority = 1 if foot else 0
-            if foot:
-                geom.friction[0] = 0.6
-        else:
-            geom.contype, geom.conaffinity = 0, 0
-
-    # The Mid-360 and its IMU, copied from our description so the two sims can't drift apart.
-    mount = mujoco.MjSpec.from_file(description)
-    torso = spec.body('torso_link')
-    for name in ('mid360', 'mid360_imu'):
-        site = mount.site(name)
-        torso.add_site(name=name, pos=site.pos, quat=site.quat, size=site.size)
-    for name in ('mid360-imu-angular-velocity', 'mid360-imu-linear-acceleration'):
-        sensor = mount.sensor(name)
-        spec.add_sensor(name=name, type=sensor.type, objtype=sensor.objtype, objname=sensor.objname,
-                        noise=sensor.noise)
-
-    model = spec.compile()
-    hinges = np.nonzero(model.jnt_type == mujoco.mjtJoint.mjJNT_HINGE)[0]
-    assert (model.actuator_trnid[:, 0] == hinges).all(), 'actuators must follow joint order, like the policy'
-
-    # Unitree-G1-Flat's solver settings, with mjlab's defaults for the rest.
-    model.opt.timestep = IMU_DT
-    model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-    model.opt.cone = mujoco.mjtCone.mjCONE_PYRAMIDAL
-    model.opt.jacobian = mujoco.mjtJacobian.mjJAC_AUTO
-    model.opt.solver = mujoco.mjtSolver.mjSOL_NEWTON
-    model.opt.iterations = 10
-    model.opt.ls_iterations = 20
-    model.opt.tolerance = 1e-8
-    model.opt.ls_tolerance = 0.01
-    model.opt.ccd_iterations = 50
-    model.opt.impratio = 1.0
-    return model
-
-
-class WalkPolicy:
-    """An rsl_rl actor: its observation normaliser, then an ELU MLP. Returns the mean action, without sampling."""
-
-    def __init__(self, path, model):
-        import torch  # only to read the checkpoint
-        actor = torch.load(path, map_location='cpu', weights_only=True)['actor_state_dict']
-        self.mean = actor['obs_normalizer._mean'].numpy()[0]
-        self.std = actor['obs_normalizer._std'].numpy()[0]
-        ids = sorted({int(k.split('.')[1]) for k in actor if k.startswith('mlp.')})
-        self.layers = [(actor[f'mlp.{i}.weight'].numpy(), actor[f'mlp.{i}.bias'].numpy()) for i in ids]
-
-        hinges = np.nonzero(model.jnt_type == mujoco.mjtJoint.mjJNT_HINGE)[0]
-        names = [model.joint(int(j)).name for j in hinges]
-        self.default = np.array([next((v for p, v in DEFAULT_POSE.items() if re.fullmatch(p, n)), 0.0)
-                                 for n in names])
-        stiffness = np.array([match_one(MOTORS, n)[0] for n in names]) * NATURAL_FREQ**2
-        effort = np.array([match_one(MOTORS, n)[1] for n in names])
-        self.scale = 0.25 * effort / stiffness  # G1_ACTION_SCALE
-        self.last_action = np.zeros(len(names))
-        self.steps = 0
-        expected = 3 + 3 + 3 + 2 + 3 * len(names)
-        if self.layers[0][0].shape[1] != expected or self.layers[-1][0].shape[0] != len(names):
-            raise ValueError(f'{path} takes {self.layers[0][0].shape[1]} observations and gives '
-                             f'{self.layers[-1][0].shape[0]} actions; this sim provides {expected} and {len(names)}')
-
-    def observation(self, data, command):
-        """Unitree-G1-Flat's actor observations, in order."""
-        w, x, y, z = data.qpos[3:7]
-        gravity = Rotation.from_quat([x, y, z, w]).inv().apply([0.0, 0.0, -1.0])
-        phase = (self.steps * POLICY_DT) % GAIT_PERIOD / GAIT_PERIOD
-        clock = [np.sin(2 * np.pi * phase), np.cos(2 * np.pi * phase)] if np.linalg.norm(command) >= 0.1 else [0, 0]
-        return np.concatenate([
-            data.qvel[3:6],  # pelvis angular velocity in the pelvis frame, which the pelvis gyro measures
-            gravity, command, clock,
-            data.qpos[7:] - self.default, data.qvel[6:], self.last_action,
-        ])
-
-    def __call__(self, data, command):
-        """Joint position targets for the next policy step."""
-        x = (self.observation(data, command) - self.mean) / (self.std + 1e-2)  # rsl_rl's normaliser, eps 1e-2
-        for i, (weight, bias) in enumerate(self.layers):
-            x = weight @ x + bias
-            if i < len(self.layers) - 1:
-                x = np.where(x > 0, x, np.expm1(x))
-        self.last_action = x
-        self.steps += 1
-        return self.default + self.scale * x
-
-
-class RouteFollower:
-    """Turns toward the next waypoint and walks when roughly facing it, within the policy's command ranges."""
-
-    REACHED = 0.4   # m
-    MAX_TURN = 0.5  # rad/s, the flat policy's play range
-
-    def __init__(self, route, speed):
-        self.route = route
-        self.speed = speed
-        self.index = 0
-
-    def command(self, pos, yaw):
-        while self.index < len(self.route):
-            dx, dy = np.array(self.route[self.index]) - pos[:2]
-            if np.hypot(dx, dy) > self.REACHED:
-                break
-            self.index += 1
-        if self.index == len(self.route):
-            return np.zeros(3)
-        error = np.arctan2(np.sin(np.arctan2(dy, dx) - yaw), np.cos(np.arctan2(dy, dx) - yaw))
-        forward = self.speed * max(np.cos(error), 0.0) ** 2 if abs(error) < 0.8 else 0.0
-        return np.array([forward, 0.0, float(np.clip(1.0 * error, -self.MAX_TURN, self.MAX_TURN))])
+def load_scenario(name):
+    """A scenario by name (sim/scenarios/<name>.yaml) or by path."""
+    path = Path(name) if name.endswith('.yaml') else repo_root() / 'sim' / 'scenarios' / f'{name}.yaml'
+    if not path.is_file():
+        known = ', '.join(p.stem for p in sorted((repo_root() / 'sim' / 'scenarios').glob('*.yaml')))
+        raise FileNotFoundError(f'No scenario at "{path}". Known: {known}')
+    with open(path) as f:
+        return yaml.safe_load(f)
 
 
 class G1WalkSim(Node):
 
     # The sensor publishing and error report are the scripted sim's. They use self.data, rng, gyro, accel,
-    # lidar, rays, ray_index, rays_per_slice, joint_*, gt, t_start, errors and the *_pub publishers.
+    # lidar, rays, ray_index, rays_per_slice, the noise settings, joint_*, gt, t_start, errors and the publishers.
     sensor = Mid360Sim.sensor
     publish_imu = Mid360Sim.publish_imu
     publish_joints = Mid360Sim.publish_joints
     record_ground_truth = Mid360Sim.record_ground_truth
+    declare_lidar_noise = Mid360Sim.declare_lidar_noise
+    add_lidar_noise = Mid360Sim.add_lidar_noise
     trace_slice = Mid360Sim.trace_slice
     on_odometry = Mid360Sim.on_odometry
     report = Mid360Sim.report
 
     def __init__(self):
         super().__init__('mujoco_g1_walk_sim')
-        self.scene = self.declare_parameter('scene', find_in_repo('sim/g1_walk_scene.xml')).value
-        description = self.declare_parameter(
-            'description', find_in_repo('description/g1/g1_29dof_rev_1_0.xml')).value
-        policy = self.declare_parameter('policy', find_in_repo('training/models/g1_walk/model_12400.pt')).value
+        self.scenario_name = self.declare_parameter('scenario', 'room_walk').value
+        scenario = load_scenario(self.scenario_name)
+        # Overrides of the scenario; empty or 0 keeps the scenario's value.
+        scene = self.declare_parameter('scene', '').value or in_repo(scenario['scene'])
+        policy = self.declare_parameter('policy', '').value or in_repo(scenario['policy']['checkpoint'])
+        self.duration = self.declare_parameter('duration', 0.0).value or float(scenario['duration'])
+        speed = self.declare_parameter('speed', 0.0).value
+        # Where a height-map policy's terrain scan comes from: true_terrain or elevation_map.
+        self.scan_source = self.declare_parameter('scan', '').value or scenario['policy'].get('scan', 'true_terrain')
+        description = self.declare_parameter('description', in_repo('description/g1/g1_29dof_rev_1_0.xml')).value
         self.viewer = self.declare_parameter('viewer', True).value
-        self.duration = self.declare_parameter('duration', 180.0).value
         self.hold = self.declare_parameter('hold', 3.0).value
-        speed = self.declare_parameter('speed', 0.5).value
         self.rays_per_slice = self.declare_parameter('rays_per_slice', 2000).value
-        self.rng = np.random.default_rng(self.declare_parameter('seed', 0).value)
+        seed = self.declare_parameter('seed', 0).value
+        self.rng = np.random.default_rng(seed)
+        self.declare_lidar_noise(seed)
         if not Path(policy).is_file():
-            raise FileNotFoundError(
-                f'No walking policy at "{policy}". Build with --symlink-install so the default '
-                'training/models/g1_walk/model_12400.pt is found, or pass -p policy:=<path to a .pt checkpoint>')
+            raise FileNotFoundError(f'No walking policy at "{policy}". Pass -p policy:=<path to a checkpoint>')
 
-        self.model = build_model(self.scene, description)
+        self.model = g1_model.build_model(scene, description)
         self.data = mujoco.MjData(self.model)
-        self.policy = WalkPolicy(policy, self.model)
-        self.route = RouteFollower(ROUTE, speed)
-        self.data.qpos[:3] = [0.0, 0.0, START_HEIGHT]
-        self.data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
-        self.data.qpos[7:] = self.policy.default
-        mujoco.mj_forward(self.model, self.data)
+        self.scan = None
+        if self.scan_source == 'true_terrain':
+            self.scan = TrueTerrainScan(self.model, self.data)
+        elif self.scan_source == 'elevation_map':
+            self.scan = ElevationMapScan(self, TrueTerrainScan(self.model, self.data), g1_model.sole_depth(self.model))
+        else:
+            raise ValueError(f'Unknown scan source "{self.scan_source}": use true_terrain or elevation_map')
+        self.policy = make_policy(scenario['policy']['type'], policy, self.model, self.scan)
+        if not self.policy.needs_scan:
+            self.scan = None
+        self.decimation = int(round(self.policy.dt / IMU_DT))
+        self.motion = make_motion(scenario['motion'], speed)
+        s = scenario.get('spawn', {})
+        ground = g1_model.spawn(self.model, self.data, s.get('x', 0.0), s.get('y', 0.0), s.get('yaw', 0.0))
+        self.get_logger().info(f'Scenario "{self.scenario_name}": {Path(scene).name}, spawn at ({s.get("x", 0.0)}, '
+                               f'{s.get("y", 0.0)}) on ground {ground:.3f} m, {Path(policy).name}'
+                               + (f', terrain scan from {self.scan_source}' if self.scan else ''))
 
         from mujoco_lidar import MjLidarWrapper
         from mujoco_lidar.scan_gen import LivoxGenerator
-        # Trace the room and the robot's visual meshes (groups 0-2), not its collision capsules (group 3).
+        # Trace the scene and the robot's visual meshes (groups 0-2), not its collision capsules (group 3).
         # torso_link is left out because the mid360 site is inside its head mesh.
         self.lidar = MjLidarWrapper(
             self.model, 'mid360', backend='warp', cutoff_dist=40.0,
@@ -292,24 +140,34 @@ class G1WalkSim(Node):
         w, x, y, z = self.data.qpos[3:7]
         return self.data.qpos[:3], Rotation.from_quat([x, y, z, w]).as_euler('ZYX')[0]
 
+    def height_above_ground(self):
+        pos = self.data.qpos[:3]
+        ground = g1_model.ground_below(self.model, self.data, pos[0], pos[1], top=pos[2])
+        return np.inf if ground is None else pos[2] - ground
+
     def control(self, t):
-        command = np.zeros(3) if t < self.hold else self.route.command(*self.pelvis_pose())
+        command = np.zeros(3) if t < self.hold else self.motion.command(t - self.hold, *self.pelvis_pose())
         self.data.ctrl[:] = self.policy(self.data, command)
 
     def run(self):
-        for _ in range(int(SETTLE / IMU_DT)):
-            if _ % DECIMATION == 0:
+        for step in range(int(SETTLE / IMU_DT)):
+            if step % self.decimation == 0:
                 self.control(0.0)
             mujoco.mj_step(self.model, self.data)
-        torso = Rotation.from_matrix(self.data.body('torso_link').xmat.reshape(3, 3)).as_euler('xyz', degrees=True)
+        torso = self.data.body('torso_link')
+        rot = Rotation.from_matrix(torso.xmat.reshape(3, 3))
+        roll, pitch = rot.as_euler('xyz', degrees=True)[:2]
+        heading = rot.as_euler('ZYX', degrees=True)[0]
+        x, y, z = torso.xpos
         self.get_logger().info(
-            f'Standing after {SETTLE:.0f} s: pelvis height {self.data.qpos[2]:.3f} m, torso roll {torso[0]:+.2f} '
-            f'pitch {torso[1]:+.2f} deg (gravity_align levels odom for this)')
+            f'Standing after {SETTLE:.0f} s: pelvis {self.height_above_ground():.3f} m above the ground, torso roll '
+            f'{roll:+.2f} pitch {pitch:+.2f} deg (gravity_align levels odom for this). odom will be about torso_link '
+            f'now, levelled: ({x:.3f}, {y:.3f}, {z:.3f}) m in the scene, heading {heading:.2f} deg')
 
         self.get_logger().info('Waiting for a /livox/lidar subscriber (start perception.launch.py)...')
         while rclpy.ok() and self.count_subscribers('/livox/lidar') == 0:
             rclpy.spin_once(self, timeout_sec=0.1)
-        self.get_logger().info(f'Walking {len(ROUTE)} waypoints, for up to {self.duration:.0f} s of sim time.')
+        self.get_logger().info(f'Running "{self.scenario_name}" for up to {self.duration:.0f} s of sim time.')
 
         viewer = None
         if self.viewer:
@@ -321,19 +179,20 @@ class G1WalkSim(Node):
 
         wall_start = time.monotonic()
         points, frame_start, slices, tick = [], 0.0, 0, 0
-        fell = False
+        fell, finished = False, None
         while rclpy.ok() and tick * IMU_DT < self.duration and (viewer is None or viewer.is_running()):
             t = tick * IMU_DT
             ahead = wall_start + t - time.monotonic()
             if ahead > 0:
                 time.sleep(ahead)
 
-            if tick % DECIMATION == 0:
+            policy_tick = tick % self.decimation == 0
+            if policy_tick:
                 self.control(t)
             clock = Clock()
             clock.clock = to_stamp(t)
             self.clock_pub.publish(clock)
-            if tick % DECIMATION == 0:
+            if policy_tick:
                 self.publish_joints(t)
             # After mj_step, positions and sensors are still those at t; only qpos and qvel have moved on.
             mujoco.mj_step(self.model, self.data)
@@ -354,15 +213,15 @@ class G1WalkSim(Node):
                 points += self.trace_slice(offset_ns, slices * self.rays_per_slice)
                 slices += 1
 
-            if self.data.qpos[2] < FALLEN_HEIGHT:
+            if policy_tick and self.height_above_ground() < FALLEN_HEIGHT:
                 fell = True
-                self.get_logger().error(f'The robot fell at t = {t:.1f} s, near ({self.data.qpos[0]:.1f}, '
-                                        f'{self.data.qpos[1]:.1f}), heading for waypoint {self.route.index + 1}.')
+                self.get_logger().error(f'The robot fell at t = {t:.1f} s, near ({self.data.qpos[0]:.2f}, '
+                                        f'{self.data.qpos[1]:.2f}), after {self.motion.progress}.')
                 break
-            if self.route.index == len(ROUTE) and not hasattr(self, 'finished'):
-                self.finished = t
-                self.get_logger().info(f'Route finished at t = {t:.1f} s.')
-            if hasattr(self, 'finished') and t > self.finished + 2.0:
+            if finished is None and t >= self.hold and self.motion.done:
+                finished = t
+                self.get_logger().info(f'Motion finished at t = {t:.1f} s.')
+            if finished is not None and t > finished + 2.0:
                 break
             if viewer is not None and tick % 6 == 0:
                 viewer.sync()
@@ -374,8 +233,10 @@ class G1WalkSim(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
         realtime = tick * IMU_DT / max(time.monotonic() - wall_start - 2.0, 1e-3)
         if not fell:
-            self.get_logger().info(f'Reached {self.route.index} of {len(ROUTE)} waypoints. Ran at {realtime:.2f}x real time.')
+            self.get_logger().info(f'Completed {self.motion.progress}. Ran at {realtime:.2f}x real time.')
         self.report()
+        if isinstance(self.scan, ElevationMapScan):
+            self.get_logger().info(self.scan.report())
         if viewer is not None:
             viewer.close()
 

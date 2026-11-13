@@ -79,7 +79,9 @@ class Mid360Sim(Node):
         self.duration = self.declare_parameter('duration', 60.0).value
         self.hold = self.declare_parameter('hold', 3.0).value
         self.rays_per_slice = self.declare_parameter('rays_per_slice', 2000).value
-        self.rng = np.random.default_rng(self.declare_parameter('seed', 0).value)
+        seed = self.declare_parameter('seed', 0).value
+        self.rng = np.random.default_rng(seed)
+        self.declare_lidar_noise(seed)
 
         # MuJoCo setup
         self.model = mujoco.MjModel.from_xml_path(self.scene)
@@ -185,14 +187,49 @@ class Mid360Sim(Node):
         o.x, o.y, o.z, o.w = map(float, rel_rot.as_quat())
         self.gt_pub.publish(msg)
 
+    def declare_lidar_noise(self, seed):
+        """LiDAR noise parameters, from the Mid-360's spec. noise:=false turns off all but the blind zone."""
+        self.noise = self.declare_parameter('noise', True).value
+        self.range_noise = self.declare_parameter('range_noise', 0.02).value     # m, 1 sigma, along the ray
+        self.angle_noise = np.radians(self.declare_parameter('angle_noise', 0.15).value)  # deg, 1 sigma per axis
+        self.dropout = self.declare_parameter('dropout', 0.02).value             # fraction of returns lost
+        self.blind_zone = self.declare_parameter('blind_zone', 0.1).value        # m, closer returns are dropped
+        # Its own generator, so turning LiDAR noise on or off leaves the IMU noise unchanged.
+        self.lidar_rng = np.random.default_rng(seed + 1)
+
+    def add_lidar_noise(self, dist, hits, keep):
+        """Measured range = true range + Gaussian noise. The direction error is modelled by reporting the
+        point slightly off the true ray, perpendicular to it, which is what an angular encoder error does."""
+        n = len(dist)
+        rng = self.lidar_rng
+        # Draw for every ray, hit or not, so the noise doesn't depend on what the scan hits.
+        angle_err = rng.normal(0.0, self.angle_noise, (n, 2))
+        range_err = rng.normal(0.0, self.range_noise, n)
+        keep = keep & (rng.random(n) >= self.dropout)
+        hit = np.nonzero(keep)[0]   # misses have no direction to perturb
+        dirs = hits[hit] / dist[hit, None]
+        ref = np.where(np.abs(dirs[:, 2:3]) < 0.9, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])
+        e1 = np.cross(dirs, ref)
+        e1 /= np.linalg.norm(e1, axis=1, keepdims=True)
+        e2 = np.cross(dirs, e1)
+        dirs = dirs + angle_err[hit, :1] * e1 + angle_err[hit, 1:] * e2
+        dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+        dist, hits = dist.copy(), hits.copy()
+        dist[hit] += range_err[hit]
+        hits[hit] = dirs * dist[hit, None]
+        return dist, hits, keep
+
     def trace_slice(self, offset_ns, line_start):
         end = self.ray_index + self.rays_per_slice
         rays = self.rays[np.arange(self.ray_index, end) % len(self.rays)]
         self.ray_index = end % len(self.rays)
-        dist = np.asarray(self.lidar.trace_rays(self.data, rays[:, 0], rays[:, 1]))
-        hits = np.asarray(self.lidar.get_hit_points())
+        dist = np.asarray(self.lidar.trace_rays(self.data, rays[:, 0], rays[:, 1]), dtype=float)
+        hits = np.asarray(self.lidar.get_hit_points(), dtype=float)
+        keep = dist > 0.0   # misses are -1
+        if self.noise:
+            dist, hits, keep = self.add_lidar_noise(dist, hits, keep)
         points = []
-        for i in np.nonzero(dist > 0.1)[0]:
+        for i in np.nonzero(keep & (dist > self.blind_zone))[0]:
             x, y, z = hits[i]
             points.append(CustomPoint(
                 offset_time=offset_ns + int(i) * int(1e7 / self.rays_per_slice),

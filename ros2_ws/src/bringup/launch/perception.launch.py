@@ -83,6 +83,21 @@ def generate_launch_description():
         ],
     )
 
+    # The Mid-360 on the head sees the robot's legs and arms; drop them before elevation mapping, which would add
+    # them to the terrain. Upright-LiDAR bags have no robot in them, so there it passes everything through.
+    self_filter_g1 = Node(
+        package='bridge',
+        executable='self_filter',
+        parameters=[{'radius': 0.6, 'use_sim_time': use_sim_time}],
+        condition=IfCondition(lidar_upside_down),
+    )
+    self_filter_none = Node(
+        package='bridge',
+        executable='self_filter',
+        parameters=[{'radius': 0.0, 'use_sim_time': use_sim_time}],
+        condition=UnlessCondition(lidar_upside_down),
+    )
+
     # Elevation mapping node
     elevation_mapping = Node(
         package='elevation_mapping_cupy',
@@ -114,6 +129,8 @@ def generate_launch_description():
         odom_to_camera_init_upright,
         robot_state_publisher,
         body_to_pelvis,
+        self_filter_g1,
+        self_filter_none,
         fast_lio,
         elevation_mapping,
         rviz_node,
