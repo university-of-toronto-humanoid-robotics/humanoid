@@ -65,3 +65,10 @@ for _task_id, _make in TASKS.items():
     rl_cfg=runner_cfg(_task_id),
     runner_cls=VelocityOnPolicyRunner,
   )
+
+# play.py --fpv / --ros: Unitree's own G1 tasks get the head camera too, so the
+# operator has a first-person view with their walking models (models/g1_walk/).
+from .camera import add_head_camera_to_unitree_tasks, fpv_enabled  # noqa: E402
+
+if fpv_enabled():
+  add_head_camera_to_unitree_tasks()

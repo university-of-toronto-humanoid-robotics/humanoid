@@ -101,6 +101,12 @@ python scripts/play.py Open --fpv --viewer viser --checkpoint-file logs/rsl_rl/o
 python scripts/play.py Open --ros --viewer viser --num-envs 1 --checkpoint-file logs/rsl_rl/open/<folder>/model_<N>.pt
 ```
 
+**[NEW]**  Example: Use Unitree's walker (`--ros` gives it the head camera too):
+
+```bash
+python scripts/play.py Unitree-G1-Flat --ros --viewer viser --num-envs 1 --checkpoint-file models/g1_walk/model_12400.pt
+```
+
 In two more terminals (each: `docker compose -f docker/compose.windows.yaml exec dev bash`):
 
 ```bash
@@ -111,14 +117,18 @@ ros2 run rqt_image_view rqt_image_view /g1/head_camera/image_raw
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
+**[NEW]** Or drive with our operator station, which also shows the robot's measured speed, tilt and link status: see [`ros2_ws/src/teleop/README.md`](../ros2_ws/src/teleop/README.md).
+
 | Topic | Type | What |
 |---|---|---|
 | `/g1/head_camera/image_raw` | `sensor_msgs/Image`, `rgb8`, 640×360, up to 30 Hz | The head camera |
 | `/g1/head_camera/depth/image_raw` | `sensor_msgs/Image`, `32FC1` | Its depth, in meters |
 | `/g1/head_camera/camera_info` | `sensor_msgs/CameraInfo` | Intrinsics (42° vertical field of view) |
-| `/cmd_vel` | `geometry_msgs/Twist` | Forward and sideways speed (m/s) and turning rate (rad/s). The robot stops 0.5 s after the last message |
+| `/cmd_vel` | `geometry_msgs/Twist` | Forward and sideways speed (m/s) and turning rate (rad/s). The robot stops 0.5 s after the last message. **[NEW]** It also stands still until the first one |
+| **[NEW]** `/g1/velocity` | `geometry_msgs/TwistStamped` | The robot's measured velocity, body frame |
+| **[NEW]** `/g1/tilt` | `std_msgs/Float32` | Degrees from upright |
 
-The real camera looks steeply down, so you see the floor from about 0.5 to 2.5 m ahead and never the horizon. To try another angle: `G1_FPV_PITCH=20` in front of the command (degrees below level). Works on the new tasks only.
+The real camera looks steeply down, so you see the floor from about 0.5 to 2.5 m ahead and never the horizon. To try another angle: `G1_FPV_PITCH=20` in front of the command (degrees below level). Works on the new tasks, **[NEW]** and on `Unitree-G1-Flat` and `Unitree-G1-Rough`.
 
 ---
 

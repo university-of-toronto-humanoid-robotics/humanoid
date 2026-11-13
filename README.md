@@ -17,7 +17,7 @@ ros2_ws/src/
   bringup/       launch files, configs
   interfaces/    custom messages
   bridge/        sim ⇄ ROS 2
-  teleop/        gamepad/keyboard
+  teleop/        operator station: keyboard driving + robot status [NEW] (see its README)
   policy/        runs trained policies
   perception/    SLAM (vendored fast_lio, livox driver)
 training/        RL: Unitree's code (submodule) + our trained models

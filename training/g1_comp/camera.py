@@ -5,11 +5,15 @@ at what it sees. This puts a camera where the G1's RealSense D435i is (Unitree's
 URDF, d435_joint: in the head, pitched 47.6 degrees down) and shows its image:
 
   --fpv   in the browser viewer, under "Camera Feeds" (color and depth)
-  --ros   the same, plus ROS 2 topics, and the robot follows /cmd_vel:
+  --ros   the same, plus ROS 2 topics, and the robot follows /cmd_vel (standing
+          still until the first one, and 0.5 s after the last):
             /g1/head_camera/image_raw         sensor_msgs/Image, rgb8
             /g1/head_camera/depth/image_raw   sensor_msgs/Image, 32FC1 (meters)
             /g1/head_camera/camera_info       sensor_msgs/CameraInfo
             /cmd_vel                          geometry_msgs/Twist (linear x, y; angular z)
+            /g1/velocity                      geometry_msgs/TwistStamped, measured, body frame
+            /g1/tilt                          std_msgs/Float32, degrees from upright
+          The operator drives with ros2_ws/src/teleop (its README has the steps).
 
 Both are options of scripts/play.py. Only while playing: training never renders.
 """
@@ -62,6 +66,25 @@ def head_camera_cfg() -> CameraSensorCfg:
   )
 
 
+UNITREE_G1_TASKS = ("Unitree-G1-Flat", "Unitree-G1-Rough")
+
+
+def add_head_camera_to_unitree_tasks() -> None:
+  """Add the head camera to the play configs of Unitree's G1 tasks.
+
+  Only rendering: the camera isn't one of the policy's inputs, so their trained
+  models run unchanged. mjlab has no public way to edit a registered task, so this
+  edits the stored play config (training configs are left alone).
+  """
+  from mjlab.tasks.registry import _REGISTRY
+
+  for task_id in UNITREE_G1_TASKS:
+    if task_id in _REGISTRY:
+      scene = _REGISTRY[task_id].play_env_cfg.scene
+      if all(s.name != CAMERA_NAME for s in scene.sensors or ()):
+        scene.sensors = (*(scene.sensors or ()), head_camera_cfg())
+
+
 class RosBridge:
   """Publishes one robot's head camera and drives it from /cmd_vel.
 
@@ -71,8 +94,9 @@ class RosBridge:
 
   def __init__(self, env: ManagerBasedRlEnv, env_idx: int = 0, rate_hz: float = 30.0):
     import rclpy
-    from geometry_msgs.msg import Twist
+    from geometry_msgs.msg import Twist, TwistStamped
     from sensor_msgs.msg import CameraInfo, Image
+    from std_msgs.msg import Float32
 
     self.env, self.env_idx = env, env_idx
     self.period = 1.0 / rate_hz
@@ -80,6 +104,7 @@ class RosBridge:
     self.cmd: tuple[float, float, float] | None = None
     self.cmd_time = 0.0
     self._Image, self._CameraInfo = Image, CameraInfo
+    self._TwistStamped, self._Float32 = TwistStamped, Float32
 
     if not rclpy.ok():
       rclpy.init()
@@ -89,18 +114,22 @@ class RosBridge:
     self.depth_pub = self.node.create_publisher(Image, "/g1/head_camera/depth/image_raw", 2)
     self.info_pub = self.node.create_publisher(CameraInfo, "/g1/head_camera/camera_info", 2)
     self.node.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 2)
+    # Robot state for the operator, who may not look at the robot.
+    self.velocity_pub = self.node.create_publisher(TwistStamped, "/g1/velocity", 2)
+    self.tilt_pub = self.node.create_publisher(Float32, "/g1/tilt", 2)
 
     # The robot follows /cmd_vel while messages keep coming (the same way the
     # viewer's Twist sliders work): set the command right after it is computed.
+    # With no fresh /cmd_vel, including before the first one, it stands still
+    # instead of following play.py's random commands.
     twist = env.command_manager.get_term("twist")
     compute = twist.compute
 
     def compute_with_cmd_vel(dt: float) -> None:
       compute(dt)
-      if self.cmd is not None:
-        fresh = time.monotonic() - self.cmd_time < CMD_VEL_TIMEOUT
-        for i, v in enumerate(self.cmd if fresh else (0.0, 0.0, 0.0)):
-          twist.vel_command_b[self.env_idx, i] = v
+      fresh = self.cmd is not None and time.monotonic() - self.cmd_time < CMD_VEL_TIMEOUT
+      for i, v in enumerate(self.cmd if fresh else (0.0, 0.0, 0.0)):
+        twist.vel_command_b[self.env_idx, i] = v
 
     twist.compute = compute_with_cmd_vel
     print("[INFO] ROS 2 bridge: publishing /g1/head_camera/*, listening on /cmd_vel")
@@ -119,6 +148,20 @@ class RosBridge:
     msg.data = array.tobytes()
     return msg
 
+  def _publish_robot_state(self, stamp) -> None:
+    robot = self.env.scene["robot"].data
+    lin = robot.root_link_lin_vel_b[self.env_idx].tolist()
+    ang = robot.root_link_ang_vel_b[self.env_idx].tolist()
+    msg = self._TwistStamped()
+    msg.header.stamp = stamp
+    msg.header.frame_id = "pelvis"
+    msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z = lin
+    msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z = ang
+    self.velocity_pub.publish(msg)
+    # Gravity in the body frame is (0, 0, -1) when upright.
+    gz = float(robot.projected_gravity_b[self.env_idx, 2])
+    self.tilt_pub.publish(self._Float32(data=math.degrees(math.acos(max(-1.0, min(1.0, -gz))))))
+
   def update(self) -> None:
     """Call after every environment step."""
     self.rclpy.spin_once(self.node, timeout_sec=0.0)
@@ -126,8 +169,12 @@ class RosBridge:
     if now - self.last_publish < self.period:
       return
     self.last_publish = now
-    data = self.env.scene[CAMERA_NAME].data
     stamp = self.node.get_clock().now().to_msg()
+    self._publish_robot_state(stamp)
+    try:
+      data = self.env.scene[CAMERA_NAME].data
+    except KeyError:  # a task without our head camera (e.g. Unitree-G1-Flat): drive and status only
+      return
     if data.rgb is not None:
       rgb = np.ascontiguousarray(data.rgb[self.env_idx].cpu().numpy())
       self.image_pub.publish(self._image(rgb, "rgb8", stamp))
