@@ -1,0 +1,14 @@
+# The competition course's crossing ramps (15 deg tiles, ridges up to 19 cm, x 6.1-8.5). Starts in the
+# step-over section facing the ramps (the "ramps" spawn in sim/competition/view_course.py), walks two laps of a
+# 1.1 m square on the tiles, then returns. The square stays clear of the tall objects at x = 6.2 and x = 8.2-8.6.
+scene: sim/g1_course_scene.xml
+spawn: {x: 9.0, y: 3.5, yaw: 3.141592653589793}   # facing -x, toward the ramps
+duration: 150.0
+policy:
+  type: rsl_rl_g1_flat
+  checkpoint: training/models/g1_comp_crouch/model_799.pt #g1_walk/model_12400.pt #g1_rough/model_5996.pt #
+motion:
+  type: waypoints
+  speed: 0.4
+  points: [[7.9, 3.6], [6.8, 3.6], [6.8, 4.7], [7.9, 4.7], [7.9, 3.6],
+           [6.8, 3.6], [6.8, 4.7], [7.9, 4.7], [7.9, 3.6], [8.9, 3.6]]
