@@ -1,5 +1,8 @@
 # Train and run the G1
 
+For a course Mobility Trial evaluation of the rough height-map checkpoint, see
+[evaluation/README.md](evaluation/README.md).
+
 For GPU training in Google Colab without Docker, use
 [notebooks/train_colab.ipynb](notebooks/train_colab.ipynb). It defaults to
 G1-Flat-HeightMap, lets you choose parallel environment and iteration counts,

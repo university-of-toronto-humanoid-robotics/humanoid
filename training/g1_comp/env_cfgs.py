@@ -224,6 +224,34 @@ def g1_rough_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   return cfg
 
 
+def g1_course_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Deterministic course evaluation for G1-Rough-HeightMap checkpoints.
+
+  Keep the rough policy's observations and actions exactly as trained. The
+  course origin is the CAD start at (11.0, 4.21), so a zero-offset root reset
+  begins in the start area facing toward decreasing CAD x.
+  """
+  cfg = g1_rough_heightmap_env_cfg(play=True)
+  assert cfg.scene.terrain is not None
+  cfg.scene.num_envs = 1
+  cfg.scene.terrain.terrain_generator = course_terrains_cfg()
+  cfg.sim.nconmax = 128
+  cfg.seed = 42
+  cfg.curriculum = {}
+  for event in ("randomize_terrain", "foot_friction", "encoder_bias", "base_com"):
+    cfg.events.pop(event, None)
+  cfg.events["reset_base"] = EventTermCfg(
+    func=envs_mdp.reset_root_state_uniform,
+    mode="reset",
+    params={"pose_range": {"yaw": (math.pi, math.pi)}, "velocity_range": {}},
+  )
+  twist = cfg.commands["twist"]
+  twist.ranges.lin_vel_x = (-0.5, 1.0)
+  twist.ranges.lin_vel_y = (-0.3, 0.3)
+  twist.ranges.ang_vel_z = (-1.0, 1.0)
+  return cfg
+
+
 def g1_comp_course_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """The same robot setup on the competition course, spawning anywhere along it."""
   cfg = g1_comp_rough_env_cfg(play=play)
@@ -284,6 +312,12 @@ def g1_flat_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
 def g1_rough_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg = g1_flat_heightmap_ppo_runner_cfg()
   cfg.experiment_name = "g1_rough_heightmap"
+  return cfg
+
+
+def g1_course_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = g1_rough_heightmap_ppo_runner_cfg()
+  cfg.experiment_name = "g1_course_heightmap"
   return cfg
 
 
