@@ -13,6 +13,10 @@ Changes from Unitree-G1-Rough:
     instead of the policy (as if IK had taken over); the policy is told when
     (actions.py). Posture rewards ignore the arms then.
 Everything else (rewards, gains, randomization, PPO) is Unitree's.
+
+G1-Flat-HeightMap adds only the flattened competition scan to Unitree-G1-Flat,
+keeping its original walking setup without crouch commands or arm overrides.
+G1-Rough-HeightMap keeps that observation layout on competition-style terrain.
 """
 
 from __future__ import annotations
@@ -30,7 +34,10 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
-from src.tasks.velocity.config.g1.env_cfgs import unitree_g1_rough_env_cfg
+from src.tasks.velocity.config.g1.env_cfgs import (
+  unitree_g1_flat_env_cfg,
+  unitree_g1_rough_env_cfg,
+)
 from src.tasks.velocity.config.g1.rl_cfg import unitree_g1_ppo_runner_cfg
 
 from . import mdp
@@ -62,6 +69,25 @@ SKILLS_FULL = int(os.environ.get("G1_COMP_SKILLS_FULL", 2000))
 INIT_NOISE_STD = 0.5
 
 
+def g1_flat_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Unitree's flat walking task with a flattened 693-point terrain scan.
+
+  Appends the scan to each group's original vector: 791 actor observations and
+  806 critic observations. All other flat-ground settings are inherited.
+  """
+  cfg = unitree_g1_flat_env_cfg(play=play)
+  cfg.scene.sensors = (cfg.scene.sensors or ()) + (terrain_scan_cfg(),)
+
+  for group, noise in (("actor", Unoise(n_min=-SCAN_NOISE, n_max=SCAN_NOISE)), ("critic", None)):
+    cfg.observations[group].terms["height_scan"] = ObservationTermCfg(
+      func=envs_mdp.height_scan,
+      params={"sensor_name": "terrain_scan"},
+      noise=noise,
+      clip=SCAN_CLIP,
+    )
+  return cfg
+
+
 def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg = unitree_g1_rough_env_cfg(play=play)
 
@@ -70,6 +96,8 @@ def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   gen.curriculum = not play
   if play:
     gen.num_rows, gen.num_cols, gen.border_width = 5, 5, 10.0
+    # The assembled terrain can exceed Unitree's 48-contact buffer at startup.
+    cfg.sim.nconmax = 128
   assert cfg.scene.terrain is not None
   cfg.scene.terrain.terrain_generator = gen
 
@@ -162,6 +190,68 @@ def g1_comp_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   return cfg
 
 
+def g1_rough_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Rough terrain for continuing a G1-Flat-HeightMap walking checkpoint.
+
+  Keeps all observation columns and the original joint actions. Critic foot
+  heights and the clearance reward use local ground rather than world z.
+  """
+  cfg = g1_flat_heightmap_env_cfg(play=play)
+  rough = unitree_g1_rough_env_cfg(play=play)
+  cfg.scene.terrain = rough.scene.terrain
+  cfg.sim = rough.sim
+  cfg.events = rough.events
+  cfg.curriculum = rough.curriculum
+  cfg.sim.nconmax = 128
+
+  gen = comp_rough_terrains_cfg()
+  gen.curriculum = not play
+  if play:
+    gen.num_rows, gen.num_cols, gen.border_width = 5, 5, 10.0
+  assert cfg.scene.terrain is not None
+  cfg.scene.terrain.terrain_generator = gen
+  # Start transfer runs on the easiest row; terrain_levels promotes successes.
+  cfg.scene.terrain.max_init_terrain_level = 0
+  cfg.scene.sensors = (cfg.scene.sensors or ()) + foot_ground_sensor_cfgs()
+  cfg.observations["critic"].terms["foot_height"] = ObservationTermCfg(
+    func=mdp.foot_clearance, params={"sensor_names": FOOT_SENSOR_NAMES}
+  )
+  clearance = cfg.rewards["foot_clearance"]
+  clearance.func = mdp.feet_clearance_terrain
+  clearance.params = {**clearance.params, "sensor_names": FOOT_SENSOR_NAMES}
+  cfg.rewards["track_linear_velocity"].weight = 5.0
+  cfg.rewards["track_angular_velocity"].weight = 5.0
+  return cfg
+
+
+def g1_course_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Deterministic course evaluation for G1-Rough-HeightMap checkpoints.
+
+  Keep the rough policy's observations and actions exactly as trained. The
+  course origin is the CAD start at (11.0, 4.21), so a zero-offset root reset
+  begins in the start area facing toward decreasing CAD x.
+  """
+  cfg = g1_rough_heightmap_env_cfg(play=True)
+  assert cfg.scene.terrain is not None
+  cfg.scene.num_envs = 1
+  cfg.scene.terrain.terrain_generator = course_terrains_cfg()
+  cfg.sim.nconmax = 128
+  cfg.seed = 42
+  cfg.curriculum = {}
+  for event in ("randomize_terrain", "foot_friction", "encoder_bias", "base_com"):
+    cfg.events.pop(event, None)
+  cfg.events["reset_base"] = EventTermCfg(
+    func=envs_mdp.reset_root_state_uniform,
+    mode="reset",
+    params={"pose_range": {"yaw": (math.pi, math.pi)}, "velocity_range": {}},
+  )
+  twist = cfg.commands["twist"]
+  twist.ranges.lin_vel_x = (-0.5, 1.0)
+  twist.ranges.lin_vel_y = (-0.3, 0.3)
+  twist.ranges.ang_vel_z = (-1.0, 1.0)
+  return cfg
+
+
 def g1_comp_course_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """The same robot setup on the competition course, spawning anywhere along it."""
   cfg = g1_comp_rough_env_cfg(play=play)
@@ -209,6 +299,25 @@ def g1_comp_crouch_test_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.sim.contact_sensor_maxmatch = 64
   cfg.commands["twist"].rel_standing_envs = 0.6
   cfg.commands["base_height"].crouch_prob = 0.8
+  return cfg
+
+
+def g1_flat_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Original Unitree flat MLP/PPO settings, with a separate log directory."""
+  cfg = unitree_g1_ppo_runner_cfg()
+  cfg.experiment_name = "g1_flat_heightmap"
+  return cfg
+
+
+def g1_rough_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = g1_flat_heightmap_ppo_runner_cfg()
+  cfg.experiment_name = "g1_rough_heightmap"
+  return cfg
+
+
+def g1_course_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = g1_rough_heightmap_ppo_runner_cfg()
+  cfg.experiment_name = "g1_course_heightmap"
   return cfg
 
 
