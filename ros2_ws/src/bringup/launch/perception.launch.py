@@ -121,7 +121,7 @@ def generate_launch_description():
     )
 
     # The elevation map as the height-map policy's 693-point terrain scan, on /height_scan. Needs the pelvis and
-    # foot frames above. The walk sim reads it; nothing on the real robot does yet (g1_ctrl doesn't speak ROS).
+    # foot frames above. walk_controller reads it (see g1.launch.py).
     height_scan = Node(
         package='height_scan',
         executable='height_scan_node',

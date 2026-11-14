@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>policy</name>
+  <version>0.0.0</version>
+  <description>Runs a trained walking policy on the G1: /lowstate, /height_scan and /cmd_vel in, /lowcmd out.</description>
+  <maintainer email="rodean.moradi@gmail.com">Rodean Moradi</maintainer>
+  <license>BSD</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>unitree_hg</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>height_scan</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -19,6 +19,7 @@ setup(
             'body_to_pelvis = bridge.body_to_pelvis:main',
             'gravity_align = bridge.gravity_align:main',
             'self_filter = bridge.self_filter:main',
+            'joint_state_bridge = bridge.joint_state_bridge:main',
         ],
     },
 )

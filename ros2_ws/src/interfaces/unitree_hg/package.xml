@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>unitree_hg</name>
+  <version>0.0.0</version>
+  <description>Unitree's low-level messages for its humanoids (G1, H1-2): the robot's own /lowstate and /lowcmd.</description>
+  <maintainer email="unitree@unitree.com">Unitree</maintainer>
+  <license>BSD 3-Clause License</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

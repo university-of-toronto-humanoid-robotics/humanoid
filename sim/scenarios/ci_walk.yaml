@@ -1,0 +1,12 @@
+# CI's smoke test (tools/ci_sim_test.sh): a short straight walk on flat ground with a blind policy, so it needs no GPU.
+# Paths are relative to the repo root. Run: ros2 launch bringup g1.launch.py scenario:=ci_walk
+scene: sim/g1_walk_scene.xml
+spawn: {x: 0.0, y: 0.0, yaw: 0.0}     # pelvis position (m) and heading (rad); its height comes from the ground
+duration: 60.0                         # s of sim time, at most
+policy:
+  type: rsl_rl_g1_flat                 # see policy/policy/walk_policy.py
+  checkpoint: training/models/g1_walk/model_12400.pt
+motion:
+  type: waypoints                      # see bridge/motion.py
+  speed: 0.5                           # m/s
+  points: [[2.0, 0.0]]
