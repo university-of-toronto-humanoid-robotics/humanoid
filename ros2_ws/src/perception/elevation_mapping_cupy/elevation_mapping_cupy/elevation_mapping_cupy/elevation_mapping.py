@@ -12,7 +12,7 @@ import numpy as np
 
 from elevation_mapping_cupy.traversability_filter import (
     get_filter_chainer,
-    get_filter_torch,
+    get_filter_cupy,
 )
 from elevation_mapping_cupy.parameter import Parameter
 
@@ -144,7 +144,8 @@ class ElevationMap:
         if param.use_chainer:
             self.traversability_filter = get_filter_chainer(param.w1, param.w2, param.w3, param.w_out)
         else:
-            self.traversability_filter = get_filter_torch(param.w1, param.w2, param.w3, param.w_out)
+            # The CuPy port of the PyTorch filter: same output, without PyTorch in the image.
+            self.traversability_filter = get_filter_cupy(param.w1, param.w2, param.w3, param.w_out)
         self.untraversable_polygon = xp.zeros((1, 2))
 
         # Plugins

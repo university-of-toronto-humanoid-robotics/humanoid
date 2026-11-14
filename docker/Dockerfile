@@ -32,4 +32,20 @@ RUN pip install --break-system-packages --no-cache-dir --no-deps mujoco-lidar==0
 RUN python3 -m venv /opt/mjlab && /opt/mjlab/bin/pip install --no-cache-dir \
     mjlab==1.2.0 mujoco-warp==3.5.0 mujoco==3.5.0 warp-lang==1.12.0 scipy==1.15.3 torch==2.14.1
 
+# perception: elevation_mapping_cupy. It only runs on an NVIDIA GPU, so the CUDA packages are x86_64 only:
+# on a Mac the image still builds, but the mapping node can't run. Exact versions are the set tested on the
+# dev PC. CuPy stays below 14 because 14 pulls numpy 2, which breaks Ubuntu's scipy.
+# Slim on purpose: no PyTorch (our traversability filter is plain CuPy) and not cupy's [ctk] extra (about 2.5 GB of
+# CUDA libraries it doesn't use). It only needs NVRTC, to compile its kernels, and the CUDA runtime.
+RUN apt-get update && apt-get install -y \
+    ros-jazzy-grid-map-msgs ros-jazzy-grid-map-rviz-plugin ros-jazzy-tf-transformations \
+    python3-shapely python3-ruamel.yaml python3-opencv \
+    && rm -rf /var/lib/apt/lists/*
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+      pip install --no-cache-dir --break-system-packages \
+        cupy-cuda12x==13.6.0 nvidia-cuda-nvrtc-cu12==12.8.93 nvidia-cuda-runtime-cu12==12.8.90 \
+        simple-parsing==0.1.9; \
+    fi
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib
+
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc

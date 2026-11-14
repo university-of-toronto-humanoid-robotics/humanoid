@@ -70,6 +70,15 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}],
         condition=IfCondition(lidar_upside_down),
     )
+    # Upright-LiDAR bags aren't from the G1, so there are no joint states: a stand-in pelvis
+    # 0.47 m below the LiDAR, so height_scan still runs on them.
+    body_to_pelvis_upright = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        arguments=['--z', '-0.47', '--frame-id', 'body', '--child-frame-id', 'pelvis'],
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=UnlessCondition(lidar_upside_down),
+    )
 
     # A Node rather than an include of fast_lio's mapping.launch.py: includes aren't scoped, so its
     # rviz argument would overwrite ours, and its arguments would show up in `ros2 launch -s`.
@@ -111,6 +120,15 @@ def generate_launch_description():
         ],
     )
 
+    # The elevation map as the height-map policy's 693-point terrain scan, on /height_scan. Needs the pelvis and
+    # foot frames above. The walk sim reads it; nothing on the real robot does yet (g1_ctrl doesn't speak ROS).
+    height_scan = Node(
+        package='height_scan',
+        executable='height_scan_node',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -129,9 +147,11 @@ def generate_launch_description():
         odom_to_camera_init_upright,
         robot_state_publisher,
         body_to_pelvis,
+        body_to_pelvis_upright,
         self_filter_g1,
         self_filter_none,
         fast_lio,
         elevation_mapping,
+        height_scan,
         rviz_node,
     ])

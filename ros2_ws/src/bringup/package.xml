@@ -10,6 +10,7 @@
 
   <exec_depend>fast_lio</exec_depend>
   <exec_depend>elevation_mapping_cupy</exec_depend>
+  <exec_depend>height_scan</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>bridge</exec_depend>

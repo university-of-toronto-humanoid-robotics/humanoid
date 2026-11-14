@@ -64,7 +64,7 @@
     enable_pointcloud_publishing: false
     enable_drift_corrected_TF_publishing: false
     #### Traversability filter ########
-    use_chainer: false                              # If false, uses the PyTorch backend (GPU).
+    use_chainer: false                              # If false, uses the CuPy filter (GPU, no PyTorch needed).
 
     #### Upper bound ########
     use_only_above_for_upper_bound: false
