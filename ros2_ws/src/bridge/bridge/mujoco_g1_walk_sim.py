@@ -94,7 +94,7 @@ class G1WalkSim(Node):
         if self.scan_source == 'true_terrain':
             self.scan = TrueTerrainScan(self.model, self.data)
         elif self.scan_source == 'elevation_map':
-            self.scan = ElevationMapScan(self, TrueTerrainScan(self.model, self.data), g1_model.sole_depth(self.model))
+            self.scan = ElevationMapScan(self, TrueTerrainScan(self.model, self.data))
         else:
             raise ValueError(f'Unknown scan source "{self.scan_source}": use true_terrain or elevation_map')
         self.policy = make_policy(scenario['policy']['type'], policy, self.model, self.scan)

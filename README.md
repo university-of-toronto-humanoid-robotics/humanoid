@@ -55,12 +55,12 @@ cmake -B build -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build build -j
 sudo cmake --install build && cd - && rm -rf /tmp/Livox-SDK2
 
 # elevation mapping (elevation_mapping_cupy) — NVIDIA GPU only
-sudo apt install ros-jazzy-grid-map-msgs ros-jazzy-grid-map-rviz-plugin ros-jazzy-tf-transformations python3-shapely python3-ruamel.yaml
-pip install --user --break-system-packages "cupy-cuda12x[ctk]<14" torch simple-parsing   # cupy 14 pulls numpy 2, which breaks Ubuntu's scipy
+sudo apt install ros-jazzy-grid-map-msgs ros-jazzy-grid-map-rviz-plugin ros-jazzy-tf-transformations python3-shapely python3-ruamel.yaml python3-opencv
+pip install --user --break-system-packages cupy-cuda12x==13.6.0 nvidia-cuda-nvrtc-cu12==12.8.93 nvidia-cuda-runtime-cu12==12.8.90 simple-parsing==0.1.9   # cupy 14 pulls numpy 2, which breaks Ubuntu's scipy; no PyTorch needed
 echo 'export LD_LIBRARY_PATH="$HOME/.local/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:$HOME/.local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:$LD_LIBRARY_PATH"' >> ~/.bashrc
 ```
 
-Keep your machine in sync with `docker/Dockerfile` (elevation mapping isn't in the image yet).
+Keep your machine in sync with `docker/Dockerfile`.
 
 ## Check it works
 
@@ -78,6 +78,8 @@ ros2 launch bringup perception.launch.py use_sim_time:=true lidar_upside_down:=f
 ros2 bag play <bag> --clock                               # second terminal
 ```
 
+Elevation mapping needs an NVIDIA GPU, so it doesn't run on the Mac container. The launch file starts FAST-LIO, not the LiDAR driver: on the G1, also run `ros2 launch livox_ros_driver2 msg_MID360_launch.py`.
+
 ## LiDAR simulation (MuJoCo + simulated Mid-360)
 
 The G1 follows a scripted path (no physics or walking yet) and FAST-LIO's error against the true pose is printed at the end. Elevation mapping needs an NVIDIA GPU. Build with `--symlink-install`, or pass `-p scene:=<path to sim/g1_lidar_scene.xml>`.
@@ -94,3 +96,20 @@ ros2 run bridge mujoco_g1_walk_sim --ros-args -p scenario:=course_ramps   # the 
 `mujoco_g1_walk_sim` runs a scenario from `sim/scenarios/` (default `room_walk`): the scene, spawn pose, policy and motion script (waypoints or timed velocity commands). Copy one to make a new test.
 
 Scans have Mid-360-like noise by default (range, direction, dropout); `--ros-args -p noise:=false` gives ideal scans.
+
+## Height scan (map to policy)
+
+`height_scan_node` (`ros2_ws/src/perception/height_scan/`, started by `perception.launch.py`) turns the elevation map into the 693-point terrain scan the height-map policies were trained on, 50 times a second. The walk sim (`-p scan:=elevation_map`) reads it. Nothing on the real robot reads it yet: Unitree's `g1_ctrl` doesn't subscribe to ROS topics.
+
+| Topic | Type | What |
+|---|---|---|
+| `/height_scan` | `Float32MultiArray` | 693 values for the policy, in training order (see `height_scan/scan.py`). Not published until there is a map and a pelvis pose |
+| `/height_scan/observed_share` | `Float32` | 0-1: share of the points the map has really observed |
+| `/height_scan/feet_share` | `Float32` | 0-1: share filled from the ground under the feet (the LiDAR can't see within about 0.94 m); the rest is inpainted |
+| `/height_scan/points` | `PointCloud2` | The scan as yellow dots in RViz, for checking it sits on the ground |
+
+It needs TF for `pelvis` and the two `*_ankle_roll_link` feet, which come from `/joint_states`. If `training/g1_comp/sensors.py` changes, change `scan.py` to match. Check with:
+
+```bash
+cd ros2_ws/src/perception/height_scan && python3 -m pytest test -q
+```

@@ -21,3 +21,5 @@ jobs:
       run: docker run --rm humanoid-dev python3 -c "import rclpy, mujoco, os; print('ROS', os.environ['ROS_DISTRO'], '| MuJoCo', mujoco.__version__)"
     - name: Check mjlab
       run: docker run --rm humanoid-dev /opt/mjlab/bin/python -c "import mjlab, mujoco_warp; print('mjlab OK')"
+    - name: Check elevation mapping deps
+      run: docker run --rm humanoid-dev python3 -c "import cupy, torch, cv2, shapely, ruamel.yaml, simple_parsing; print('cupy', cupy.__version__, '| torch', torch.__version__)"

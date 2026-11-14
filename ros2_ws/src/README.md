@@ -31,8 +31,7 @@ There are two sims, both in `bridge/`:
 - **Python packages** for the sims:
   - `mujoco==3.14.0`, `mujoco-lidar==0.3.5`, `warp-lang==1.12.0`, `scipy`, `pyyaml`, and `torch` (only to read the policy checkpoint, so the CPU build is enough).
   - The Docker image has them all. Only for users of native Ubuntu 24.04, install `mujoco-lidar` and `warp-lang` with `pip install --no-deps --target .sim-deps ...` and add that folder to `PYTHONPATH`, so pip doesn't replace ROS's numpy.
-- **Elevation mapping needs an NVIDIA GPU** (CuPy), so it doesn't run in the Docker image yet. FAST-LIO and the sims do; without a GPU, warp traces the LiDAR on the CPU, more slowly.
-  - For docker, install CUDA and elevation mapping cupy [here](https://leggedrobotics.github.io/elevation_mapping_cupy/getting_started/installation.html)
+- **Elevation mapping needs an NVIDIA GPU** (CuPy). The Docker image has its packages on x86_64; run it with the GPU passed through (`--gpus all`). On a Mac it can't run. FAST-LIO and the sims run anywhere; without a GPU, warp traces the LiDAR on the CPU, more slowly.
 
 ## Running a test
 
@@ -91,7 +90,7 @@ To make a new test, copy a scenario and change it:
   - `velocity`: open-loop `segments`, each `{duration, vx, vy, wz}`.
 - **Policy types,** both read from an rsl_rl checkpoint:
   - `rsl_rl_g1_flat`: mjlab's `Unitree-G1-Flat` actor, 98 observations, blind.
-  - `rsl_rl_g1_heightmap`: the team's `G1-Flat-HeightMap` and `G1-Rough-HeightMap` actors, 791 observations: the same 98 plus a 693-point terrain scan (`bridge/height_scan.py`). The scenario's `policy.scan` (or `-p scan:=`) picks its source: `true_terrain` ray-casts the scene as training does, and `elevation_map` samples the live elevation map at the pelvis pose from TF, as the robot would. The `G1-Comp-*` tasks (793 observations) are a different family and aren't supported yet.
+  - `rsl_rl_g1_heightmap`: the team's `G1-Flat-HeightMap` and `G1-Rough-HeightMap` actors, 791 observations: the same 98 plus a 693-point terrain scan (`bridge/height_scan.py`). The scenario's `policy.scan` (or `-p scan:=`) picks its source: `true_terrain` ray-casts the scene as training does, and `elevation_map` reads `/height_scan` from `height_scan_node` (started by `perception.launch.py`), which samples the live elevation map at the pelvis pose from TF, exactly as on the robot. The `G1-Comp-*` tasks (793 observations) are a different family and aren't supported yet.
 - **New types** are a class each, registered in the `*_TYPES` dict at the bottom of `motion.py` or `walk_policy.py`.
 - **Navigation uses the true pose,** not FAST-LIO's, so perception errors don't change where the robot goes.
 - **The flat policy's safe command ranges** are vx −0.5 to 1.0 m/s, vy ±0.5 m/s and wz ±0.5 rad/s.
@@ -136,7 +135,7 @@ What the runs show:
 - **The elevation map smears tall objects** (walls, the counter) 5–10 cm into the neighbouring cells, with errors up to about 1 m there.
 - **A height-map policy can walk on the live map,** but only with two fixes, and each run above is a single run:
   - `self_filter` removes the robot's own legs and arms from the scan. Without it they enter the map as a trail of obstacles at pelvis height, and the robot fell within 2 s of walking.
-  - The upside-down Mid-360 can't see the ground within about 0.94 m of the robot, which is most of the policy's scan. The map remembers what it saw from farther away; for cells it never saw, `ElevationMapScan` uses the feet's height under the robot and the map's inpainted layer beyond that. Inpainting everywhere filled the hole near a wall with the wall's height, and the robot fell standing; using the feet everywhere read a drop beside a step as flat, and it walked off the side.
+  - The upside-down Mid-360 can't see the ground within about 0.94 m of the robot, which is most of the policy's scan. The map remembers what it saw from farther away; for cells it never saw, `height_scan_node` (`perception/height_scan/height_scan/scan.py`) uses the feet's height under the robot and the map's inpainted layer beyond that. Inpainting everywhere filled the hole near a wall with the wall's height, and the robot fell standing; using the feet everywhere read a drop beside a step as flat, and it walked off the side.
 - **The policy was trained on near-perfect scans** (±2 cm noise), while the live scan's worst point per step is typically 20–80 cm off (edges, smeared walls). Training with map-like errors, or a sensor that sees the ground near the feet, would make this much more robust.
 - **`G1-Rough-HeightMap` trained on stairs, slopes and bumps, not walls:** at `course_ramps`' spawn, beside the lane wall, door frame and beams, it falls while standing, even on the true scan.
 
@@ -148,7 +147,8 @@ What the runs show:
 | `bridge/bridge/mujoco_g1_walk_sim.py` | Walk sim: loads a scenario and runs it |
 | `bridge/bridge/g1_model.py` | Builds the G1 the way mjlab does for training (actuators, armature, contacts, solver), and places it at the spawn |
 | `bridge/bridge/walk_policy.py`, `bridge/bridge/motion.py` | Policy and motion types |
-| `bridge/bridge/height_scan.py` | The height-map policies' terrain scan, from the true terrain or the live elevation map |
+| `bridge/bridge/height_scan.py` | The height-map policies' terrain scan in the sim: ray-cast from the true terrain, or read from `/height_scan` |
+| `perception/height_scan/` | `height_scan_node`: the elevation map as the policies' terrain scan, on `/height_scan`, for the robot and the sim |
 | `bridge/bridge/gravity_align.py`, `bridge/bridge/body_to_pelvis.py`, `bridge/bridge/self_filter.py` | Started by `perception.launch.py`: the levelled `odom -> camera_init`, the link from FAST-LIO's TF tree to the URDF's, and the filter that removes the robot's own body from the scan before elevation mapping |
 | `../../sim/scenarios/`, `../../sim/*.xml` | Scenarios and scenes |
 | `bringup/launch/perception.launch.py` | The perception stack; the same launch file runs on the robot |
