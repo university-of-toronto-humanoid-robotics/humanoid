@@ -25,3 +25,5 @@ jobs:
       run: docker run --rm humanoid-dev python3 -c "import cupy, torch, cv2, shapely, ruamel.yaml, simple_parsing; print('cupy', cupy.__version__, '| torch', torch.__version__)"
     - name: Unit tests (height scan, walking policy)
       run: docker run --rm -v "$PWD":/ws -w /ws/ros2_ws/src -e PYTHONPATH=perception/height_scan:policy humanoid-dev python3 -m pytest perception/height_scan/test policy/test -q -p no:cacheprovider
+    - name: Build the workspace and walk the G1 in the sim (no GPU)
+      run: docker run --rm -v "$PWD":/ws -w /ws humanoid-dev tools/ci_sim_test.sh

@@ -89,6 +89,7 @@ motion:
 | `course_ramps` | `sim/g1_course_scene.xml`: the competition course (`sim/competition/course.xml`) | Starts in the step-over section facing the 15° crossing ramps, then two laps of a 1.1 m square on them |
 | `course_ramps_heightmap` | The competition course | A height-map policy crossing the ramps from the deck side, round a rectangle and back |
 | `room_stairs_heightmap` | The LiDAR room | A height-map policy up the room's 20 cm steps to the third, then back down |
+| `ci_walk` | The LiDAR room | 2 m straight ahead on flat ground. CI runs it on every pull request, with no GPU (`tools/ci_sim_test.sh`) |
 
 To make a new test, copy a scenario and change it:
 - **Scene:** a new scene must include `description/g1/g1_29dof_mjlab.xml` (see `sim/g1_course_scene.xml`), and its own geoms must stay in geom group 0. The spawn height and the fall check only look at that group.
