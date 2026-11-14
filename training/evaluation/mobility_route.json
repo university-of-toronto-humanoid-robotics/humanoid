@@ -1,0 +1,28 @@
+{
+  "frame": "competition CAD x/y, metres",
+  "source": "Approximate Mobility Trial targets from competition rules, page 3; adjust if surveyed markers differ",
+  "goal_radius_m": 0.25,
+  "wall_clearance_m": 0.20,
+  "return_path": "reverse_outbound",
+  "waypoints": [
+    {"id": "S", "name": "Starting location", "x": 11.00, "y": 4.21, "kind": "start"},
+    {"id": "P1", "name": "Go around open door leaf", "x": 10.80, "y": 4.65, "kind": "via", "smooth": false},
+    {"id": "P2", "name": "Approach doorway", "x": 10.10, "y": 4.65, "kind": "via", "smooth": false},
+    {"id": "P3", "name": "Doorway centre", "x": 9.75, "y": 4.25, "kind": "via", "smooth": false},
+    {"id": "P4", "name": "Clear doorway", "x": 9.38, "y": 4.25, "kind": "via", "smooth": false},
+    {"id": "A1", "name": "Step-over first target", "x": 9.10, "y": 4.95, "kind": "goal"},
+    {"id": "A2", "name": "Step-over second target", "x": 8.85, "y": 3.45, "kind": "goal"},
+    {"id": "B1", "name": "Ramps first target", "x": 6.45, "y": 3.45, "kind": "goal"},
+    {"id": "B2", "name": "Ramps second target", "x": 7.75, "y": 4.98, "kind": "goal"},
+    {"id": "P5", "name": "Leave ramps", "x": 6.25, "y": 4.98, "kind": "via"},
+    {"id": "C1", "name": "Flat first target", "x": 5.48, "y": 4.98, "kind": "goal"},
+    {"id": "P6", "name": "Approach partition", "x": 5.25, "y": 4.30, "kind": "via"},
+    {"id": "P7", "name": "Pass partition", "x": 4.55, "y": 4.30, "kind": "via"},
+    {"id": "C2", "name": "Flat second target", "x": 4.20, "y": 4.95, "kind": "goal"},
+    {"id": "P8", "name": "Stair foot", "x": 3.66, "y": 4.96, "kind": "via", "smooth": false},
+    {"id": "P9", "name": "Stair centre", "x": 3.00, "y": 4.96, "kind": "via", "smooth": false},
+    {"id": "P10", "name": "Stair top", "x": 2.30, "y": 4.96, "kind": "via", "smooth": false},
+    {"id": "D1", "name": "Landing target", "x": 1.75, "y": 4.20, "kind": "goal"},
+    {"id": "E", "name": "Ending location", "x": 1.75, "y": 3.50, "kind": "end"}
+  ]
+}
