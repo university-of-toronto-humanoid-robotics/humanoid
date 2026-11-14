@@ -1,5 +1,5 @@
-"""The terrain scan that the team's height-map policies read, in the walk sim: from the true terrain, or from
-height_scan_node, which samples the live elevation map as it does on the robot.
+"""The walk sim's side of the terrain scan that the team's height-map policies read: the true scan, straight from
+the scene, and a check of the live one against it.
 
 The scan's pattern, and how the elevation map becomes a scan, are in the height_scan package
 (ros2_ws/src/perception/height_scan/height_scan/scan.py), shared with the robot.
@@ -8,7 +8,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from bridge import g1_model
-from height_scan.scan import N_POINTS, STANDING_HEIGHT, scan_points, to_scan  # noqa: F401 (N_POINTS: walk_policy)
+from height_scan.scan import scan_points, to_scan
 
 
 def yaw_of(quat_wxyz):
@@ -49,29 +49,25 @@ class TrueTerrainScan:
         return to_scan(pos[2], self.ground(scan_points(pos[:2], yaw_of(data.qpos[3:7]))))
 
 
-class ElevationMapScan:
-    """The scan from the live elevation map, as the robot would have it: the latest /height_scan from
-    height_scan_node (started by perception.launch.py), which samples the map at the pelvis pose that TF gives
-    (FAST-LIO's estimate, with its drift and latency), not the true one. See height_scan/scan.py for how it fills
-    the ground the LiDAR hasn't seen.
+class ScanMonitor:
+    """Compares the scan the controller is being given, /height_scan from height_scan_node, with the true one.
 
-    Before the first scan arrives, the whole scan is flat ground at standing height. It also computes the true
-    scan each step, to report how far the policy's input was from it.
+    height_scan_node samples the live elevation map at the pelvis pose that TF gives (FAST-LIO's estimate, with its
+    drift and latency), not the true one. See height_scan/scan.py for how it fills the ground the LiDAR hasn't
+    seen. Only a report: nothing here reaches the controller.
     """
 
     TOPIC = '/height_scan'
 
-    def __init__(self, node, truth):
+    def __init__(self, node):
         from rclpy.qos import qos_profile_sensor_data
         from std_msgs.msg import Float32, Float32MultiArray
-        self.truth = truth
         self.scan = None
         self.observed = self.from_feet = np.nan
         node.create_subscription(Float32MultiArray, self.TOPIC, self.on_scan, qos_profile_sensor_data)
         node.create_subscription(Float32, self.TOPIC + '/observed_share', self.on_observed, 10)
         node.create_subscription(Float32, self.TOPIC + '/feet_share', self.on_feet, 10)
         self.steps = []   # (observed share, from-feet share, error RMSE over all, max |error|)
-        self.blind = 0    # steps before the first scan
 
     def on_scan(self, msg):
         self.scan = np.array(msg.data, dtype=float)
@@ -82,20 +78,19 @@ class ElevationMapScan:
     def on_feet(self, msg):
         self.from_feet = msg.data
 
-    def __call__(self, data):
+    def record(self, truth):
+        """Call once per policy step with the true scan at that moment."""
         if self.scan is None:
-            self.blind += 1
-            return np.full(N_POINTS, STANDING_HEIGHT)
-        error = self.scan - self.truth(data)
+            return
+        error = self.scan - truth
         self.steps.append((self.observed, self.from_feet, np.sqrt(np.mean(error ** 2)), np.abs(error).max()))
-        return self.scan
 
     def report(self):
         if not self.steps:
-            return f'Elevation-map scan: no {self.TOPIC} ever arrived (is perception.launch.py running?)'
+            return f'Elevation-map scan: no {self.TOPIC} ever arrived.'
         s = np.array(self.steps)
-        return (f'Elevation-map scan vs the true one over {len(s)} policy steps ({self.blind} more before the first '
-                f'scan): {np.nanmean(s[:, 0]) * 100:.0f}% of points observed by the map, '
+        return (f'Elevation-map scan vs the true one over {len(s)} policy steps: '
+                f'{np.nanmean(s[:, 0]) * 100:.0f}% of points observed by the map, '
                 f'{np.nanmean(s[:, 1]) * 100:.0f}% from the feet, the rest inpainted; error RMSE '
                 f'{s[:, 2].mean() * 100:.1f} cm; worst point per step {np.median(s[:, 3]) * 100:.0f} cm median, '
                 f'{np.percentile(s[:, 3], 95) * 100:.0f} cm 95th percentile.')

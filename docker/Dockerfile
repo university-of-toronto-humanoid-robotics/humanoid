@@ -48,4 +48,8 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
     fi
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib
 
+# The real G1 speaks CycloneDDS: with RMW_IMPLEMENTATION=rmw_cyclonedds_cpp its /lowstate and /lowcmd are ordinary
+# ROS 2 topics (ros2_ws/src/interfaces/unitree_hg). Not needed for the sim.
+RUN apt-get update && apt-get install -y ros-jazzy-rmw-cyclonedds-cpp && rm -rf /var/lib/apt/lists/*
+
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc
