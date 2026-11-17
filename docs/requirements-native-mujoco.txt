@@ -1,0 +1,3 @@
+# Standalone competition-course viewer and geometry checks
+mujoco==3.14.0
+numpy

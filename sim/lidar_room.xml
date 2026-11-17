@@ -1,0 +1,21 @@
+<mujoco model="lidar_room">
+  <!-- A walled room with obstacles and stairs, so LiDAR odometry has geometry to track. No floor or light:
+       the scene that includes this provides them. Shared by g1_lidar_scene.xml and g1_walk_scene.xml. -->
+  <worldbody>
+    <geom name="wall_n" type="box" pos="0 9 1.5" size="10 0.1 1.5" rgba="0.5 0.5 0.55 1"/>
+    <geom name="wall_s" type="box" pos="0 -6 1.5" size="10 0.1 1.5" rgba="0.5 0.5 0.55 1"/>
+    <geom name="wall_e" type="box" pos="10 1.5 1.5" size="0.1 7.5 1.5" rgba="0.5 0.5 0.55 1"/>
+    <geom name="wall_w" type="box" pos="-10 1.5 1.5" size="0.1 7.5 1.5" rgba="0.5 0.5 0.55 1"/>
+
+    <geom name="box_1" type="box" pos="4 -2.5 0.4" size="0.6 0.6 0.4" euler="0 0 0.4" rgba="0.7 0.4 0.3 1"/>
+    <geom name="box_2" type="box" pos="-4 -3 0.75" size="0.5 0.9 0.75" euler="0 0 -0.3" rgba="0.3 0.6 0.4 1"/>
+    <geom name="box_3" type="box" pos="-5 5 0.3" size="1 0.5 0.3" euler="0 0 0.8" rgba="0.3 0.4 0.7 1"/>
+    <geom name="pillar_1" type="cylinder" pos="6 6 1.25" size="0.3 1.25" rgba="0.6 0.6 0.3 1"/>
+    <geom name="pillar_2" type="cylinder" pos="-7 0 1.25" size="0.25 1.25" rgba="0.6 0.6 0.3 1"/>
+
+    <geom name="step_1" type="box" pos="5.0 2.5 0.1" size="0.2 1.2 0.1" rgba="0.6 0.5 0.6 1"/>
+    <geom name="step_2" type="box" pos="5.4 2.5 0.2" size="0.2 1.2 0.2" rgba="0.6 0.5 0.6 1"/>
+    <geom name="step_3" type="box" pos="5.8 2.5 0.3" size="0.2 1.2 0.3" rgba="0.6 0.5 0.6 1"/>
+    <geom name="step_4" type="box" pos="6.2 2.5 0.4" size="0.2 1.2 0.4" rgba="0.6 0.5 0.6 1"/>
+  </worldbody>
+</mujoco>

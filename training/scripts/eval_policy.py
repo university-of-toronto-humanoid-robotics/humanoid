@@ -26,8 +26,8 @@ HOLD_S = 4.0  # seconds per commanded height; the last second is measured
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   parser.add_argument("--checkpoint", help="trained model_<N>.pt; leave out to test with zero actions")
-  parser.add_argument("--task", default="Flat", help="the task the model was trained on (any new task; "
-                      "G1-Comp-Rough for the older models). The test itself is always on flat ground")
+  parser.add_argument("--task", default="G1-Comp-Rough", help="task compatible with the checkpoint; "
+                      "the test itself always uses flat ground")
   parser.add_argument("--num-envs", type=int, default=32)
   args = parser.parse_args()
 

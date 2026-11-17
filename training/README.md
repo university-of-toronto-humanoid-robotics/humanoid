@@ -1,5 +1,18 @@
 # Train and run the G1
 
+The original height-map policy and the new competition tasks are both available.
+For native Apple Silicon setup, see [the Mac guide](../docs/native-macos.md).
+For the existing rough height-map checkpoint on a fixed Mobility Trial route,
+see [evaluation/README.md](evaluation/README.md).
+
+Two Colab notebooks serve different policy families:
+
+- [notebooks/train_colab.ipynb](notebooks/train_colab.ipynb) trains or continues
+  `G1-Flat-HeightMap` and `G1-Rough-HeightMap`, with Drive checkpoint selection
+  and W&B logging.
+- [colab/train_g1.ipynb](colab/train_g1.ipynb) trains the new `Flat`, `Open`,
+  `Competition`, and related tasks. Keep checkpoints within the same task family.
+
 ## Quick start (copy, paste)
 
 **1. Turn on the container.** Docker Desktop must be running. In your `humanoid` folder:
@@ -56,7 +69,7 @@ The same `--from` line continues any run after it was stopped (use the newest `m
 First time on this computer? Run this once, in your `humanoid` folder, before step 1:
 
 ```bash
-git pull && git switch competition && git submodule update --init
+git submodule update --init
 ```
 
 ---
@@ -73,7 +86,7 @@ git pull && git switch competition && git submodule update --init
 | Train for longer | `--agent.max-iterations 5000` |
 | Name the run | `--agent.run-name base`; also change `logs/flat_base.log` to match |
 | Let robots start on harder rows | add `--env.scene.terrain.max-init-terrain-level 5` (default 1: they earn the harder rows) |
-| Continue from any saved model | `--from <path to model_<N>.pt>`; the task can be different from the original one |
+| Continue from a compatible model | `--from <path to model_<N>.pt>`; the task can differ within one policy family |
 | Train without mirror augmentation, to compare | put `G1_MIRROR=0` in front of `setsid` |
 | Train with Unitree's full contacts, to compare | put `G1_FULL_CONTACT=1` in front of `setsid` |
 | Train in the foreground (watch the output, `Ctrl+C` to stop) | drop `setsid nohup` and everything from `>` onward |
@@ -155,6 +168,14 @@ What each robot is doing at any moment while training: walking a commanded veloc
 | `G1-Comp-Crouch-Test` | Flat, 60% of robots standing, crouching and arm takeover from the start | Quick crouch check. `models/g1_comp_crouch/model_799.pt` came from it: crouches, doesn't walk |
 | `Unitree-G1-Flat`, `Unitree-G1-Rough` | Unitree's original tasks, no changes (Flat has no height map) | `models/g1_walk/` came from `Unitree-G1-Flat` |
 
+The earlier `G1-Flat-HeightMap` and `G1-Rough-HeightMap` tasks also remain
+registered. Their checkpoints have 791 actor inputs and work with each other;
+`G1-Course-HeightMap` loads the same policy on the CAD course for route
+evaluation. The new `Flat`/`Open`/`Competition` family has 793 actor inputs
+and uses a foot-relative map, so its checkpoints cannot be loaded directly into
+the earlier height-map tasks or vice versa. `G1-Comp-*` is a third, separate
+family with crouch and arm-control inputs.
+
 ### The training plan
 
 1. **Base: `Flat`, about 3,000 iterations.** Walks after about 500; by 3,000 the curves are flat (10,000 would add nothing). One base model for the whole team.
@@ -194,9 +215,12 @@ What's in `training/models/` now:
 |---|---|---|
 | `models/g1_comp_crouch/model_799.pt` | `G1-Comp-*` | Stands and crouches on command (down to ~0.56 m), even with the arms moving. **Doesn't walk.** |
 | `models/g1_walk/model_<N>.pt` (N = 500 … 12400) | `Unitree-G1-Flat` | Unitree's flat walking demo. The early ones show how learning progresses |
+| `models/best_g1_flat_heightmap/model_1999.pt` | `G1-Flat-HeightMap` | Earlier flat walking policy with the 693-point height map |
+| `models/best_g1_rough_heightmap/model_5996.pt` | `G1-Rough-HeightMap` | Earlier rough-terrain policy; default for the route evaluator |
 
 What a training run's folder holds:
-- `<experiment>` is `g1_comp_rough`, `g1_comp_course`, `g1_comp_crouch_test` or `g1_velocity`.
+- `<experiment>` is the task's configured log name, for example `flat`, `open`,
+  `g1_flat_heightmap`, `g1_rough_heightmap`, `g1_comp_rough`, or `g1_velocity`.
 - `model_<N>.pt`: a saved model every 100 iterations, plus the last one. **This is what you watch or continue from.**
 - `policy.onnx`: the latest model, exported for the robot.
 - `params/`: every setting the run used.
@@ -220,7 +244,7 @@ tensorboard --logdir logs/rsl_rl --bind_all
 - For numbers instead of eyeballing (crouch accuracy, walking speed):
 
   ```bash
-  python scripts/eval_policy.py --checkpoint <model_<N>.pt>
+  python scripts/eval_policy.py --task Open --checkpoint <model_<N>.pt>
   ```
 - Training stops if the laptop sleeps or shuts down, or Docker Desktop quits. You lose at most the last 99 iterations.
 
@@ -248,9 +272,10 @@ To see the course alone, run this from the `humanoid` folder (`--spawn stairs` a
 python3 sim/competition/view_course.py --no-robot
 ```
 
-### What our tasks change, and why
+### What the older G1-Comp-* tasks change, and why
 
-All built on Unitree's `Unitree-G1-Rough`. Unchanged: the robot, the motor gains, most rewards, randomization and PPO.
+These tasks build on Unitree's `Unitree-G1-Rough`. The new tasks above use a
+foot-relative map instead; see `scan.py` and the comparison above.
 
 - **Height map (`sensors.py`).**
   - A 1.6 × 1.0 m grid of 33 × 21 points (5 cm spacing) around the robot, from 0.5 m behind to 1.1 m ahead, turning with its heading.

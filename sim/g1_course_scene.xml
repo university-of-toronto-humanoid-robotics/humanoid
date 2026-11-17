@@ -1,0 +1,7 @@
+<mujoco model="g1_course_scene">
+  <!-- The policy-training G1 on the competition course (floor, light and sky come with course.xml), for
+       bridge/mujoco_g1_walk_sim.py. The node places the robot at the scenario's spawn. -->
+  <include file="../description/g1/g1_29dof_mjlab.xml"/>
+  <compiler meshdir="../description/g1/meshes"/>
+  <include file="competition/course.xml"/>
+</mujoco>

@@ -5,6 +5,36 @@
 import cupy as cp
 
 
+def get_filter_cupy(w1, w2, w3, w_out):
+    """The torch filter below, in plain CuPy, so elevation mapping doesn't need PyTorch (about 5 GB with its CUDA
+    libraries). Same maths: three 3x3 convolutions with dilations 1, 2 and 3 (4 channels each, no bias), cropped
+    to the same size, then exp(-(1x1 convolution of their absolute values)). Returns shape (1, 1, H - 6, W - 6).
+    """
+    weights = [cp.asarray(w, dtype=cp.float32)[:, 0] for w in (w1, w2, w3)]   # each (4, 3, 3)
+    w_out = cp.asarray(w_out, dtype=cp.float32)[0, :, 0, 0]                  # (12,)
+
+    def conv(x, w, d):
+        # Valid cross-correlation (what torch's Conv2d computes) of x with dilation d: (4, H - 2d, W - 2d).
+        h, v = x.shape[0] - 2 * d, x.shape[1] - 2 * d
+        out = cp.zeros((w.shape[0], h, v), dtype=cp.float32)
+        for a in range(3):
+            for b in range(3):
+                out += w[:, a, b, None, None] * x[None, a * d:a * d + h, b * d:b * d + v]
+        return out
+
+    def traversability_filter(elevation):
+        x = cp.asarray(elevation, dtype=cp.float32)
+        out = cp.concatenate([
+            conv(x, weights[0], 1)[:, 2:-2, 2:-2],
+            conv(x, weights[1], 2)[:, 1:-1, 1:-1],
+            conv(x, weights[2], 3),
+        ])
+        # A weighted sum rather than tensordot, which would need cuBLAS (not in the image).
+        return cp.exp(-(w_out[:, None, None] * cp.abs(out)).sum(axis=0))[None, None]
+
+    return traversability_filter
+
+
 def get_filter_torch(*args, **kwargs):
     import torch
     import torch.nn as nn

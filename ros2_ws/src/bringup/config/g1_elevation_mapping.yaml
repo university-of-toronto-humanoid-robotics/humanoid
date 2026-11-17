@@ -18,7 +18,8 @@
 
     subscribers:
       mid360:
-        topic_name: '/cloud_registered_body'   # FAST-LIO scan in the sensor frame (cupy's noise model expects that)
+        topic_name: '/cloud_self_filtered'     # FAST-LIO's scan in the sensor frame (cupy's noise model expects that),
+                                               # without the robot's own body (bridge/self_filter.py)
         data_type: pointcloud
 
     publishers:

@@ -4,9 +4,17 @@ ros2_ws/log/
 
 .vscode/
 
+# macOS folder metadata
+.DS_Store
+
 # Competition CAD (downloaded by tools/cad/fetch_testbed.py, too big for git)
 sim/competition/cad/
 __pycache__/
 
 # Training runs from training/scripts/ (checkpoints, tensorboard logs)
 training/logs/
+
+# Native macOS development environments
+.venv-native/
+.venv-mjlab/
+.cache/

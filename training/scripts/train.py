@@ -6,10 +6,12 @@ of its options. From training/ inside the container:
   python scripts/train.py G1-Comp-Rough --env.scene.num-envs 512
   python scripts/train.py G1-Comp-Rough --from models/g1_comp_crouch/model_799.pt
 
---from FILE continues from any saved model_<N>.pt, also of another task (e.g. a
-G1-Comp-Flat model on G1-Comp-Rough): the file is copied into this task's log
-folder and Unitree's resume options are filled in for you. The copy's observation
-normalizer is told to adapt quickly to the new task (NORMALIZER_MEMORY).
+--from FILE continues from a model_<N>.pt with the same policy observation and
+action layout (e.g. G1-Comp-Flat to G1-Comp-Rough, or Flat to Open). The file
+is copied into this task's log folder and Unitree's resume options are filled
+in for you. For those task families, the copy's observation normalizer adapts
+quickly to the new task (NORMALIZER_MEMORY). The older G1-*-HeightMap family
+keeps its original normalizer behavior.
 
 Saves to training/logs/rsl_rl/<experiment>/<date>_<run name>/. One GPU only:
 with --gpu-ids for several GPUs, the worker processes would not see our tasks.
@@ -24,6 +26,7 @@ from pathlib import Path
 import _setup
 import src.tasks  # noqa: F401  (registers Unitree's tasks)
 from mjlab.tasks.registry import load_rl_cfg
+from g1_comp.tasks import TASKS
 
 
 # Samples the observation normalizer counts as "already seen" when continuing with
@@ -59,7 +62,8 @@ def use_from_option(argv: list[str]) -> list[str]:
   dest = Path("logs") / "rsl_rl" / experiment / run
   dest.mkdir(parents=True, exist_ok=True)
   shutil.copy2(source, dest / source.name)
-  shorten_normalizer_memory(dest / source.name)
+  if task in TASKS or task.startswith("G1-Comp-"):
+    shorten_normalizer_memory(dest / source.name)
   print(f"[INFO] Continuing from {source} (copied to {dest})")
   return args + ["--agent.resume", "True", "--agent.load-run", run, "--agent.load-checkpoint", source.name]
 

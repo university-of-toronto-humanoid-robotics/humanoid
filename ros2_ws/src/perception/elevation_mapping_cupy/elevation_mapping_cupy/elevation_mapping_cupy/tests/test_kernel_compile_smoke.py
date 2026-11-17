@@ -46,7 +46,7 @@ def test_kernels_compile_and_one_update_step_runs():
     R = np.eye(3, dtype=np.float32)
     t = np.zeros(3, dtype=np.float32)
 
-    # Should run without exceptions (kernels + traversability torch filter).
+    # Should run without exceptions (kernels + traversability filter).
     emap.input_pointcloud(pts, ["x", "y", "z"], R, t, 0.0, 0.0)
     emap.update_variance()
     emap.update_time()

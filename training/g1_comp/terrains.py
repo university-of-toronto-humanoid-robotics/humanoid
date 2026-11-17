@@ -41,10 +41,10 @@ COURSE_DIR = REPO_ROOT / "sim" / "competition"
 STAIR_HEIGHTS = (0.0, 0.23)
 
 
-def comp_rough_terrains_cfg() -> TerrainGeneratorCfg:
+def comp_rough_terrains_cfg(stair_height_range: tuple[float, float] = STAIR_HEIGHTS) -> TerrainGeneratorCfg:
   """Rough terrain with competition-height stairs. "up" spawns at the bottom of a
   stepped pit, "down" on top of a stepped pyramid."""
-  stairs = dict(step_height_range=STAIR_HEIGHTS, platform_width=3.0, border_width=1.0)
+  stairs = dict(step_height_range=stair_height_range, platform_width=3.0, border_width=1.0)
   return TerrainGeneratorCfg(
     size=(8.0, 8.0),
     border_width=20.0,

@@ -575,6 +575,14 @@
     <child link="mid360_link"/>
   </joint>
 
+  <!-- MY OWN mid360 IMU added -->
+  <link name="mid360_imu"></link>
+  <joint name="mid360_imu_joint" type="fixed">
+    <origin xyz="0.011 0.02329 -0.04412"/>
+    <parent link="mid360_link"/>
+    <child link="mid360_imu"/>
+  </joint>
+
   <!-- Arm -->
   <link name="left_shoulder_pitch_link">
     <inertial>
