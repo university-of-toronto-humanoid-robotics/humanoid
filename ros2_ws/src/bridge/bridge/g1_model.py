@@ -1,51 +1,21 @@
 """The G1 as mjlab builds it for training, in any scene that includes description/g1/g1_29dof_mjlab.xml.
 
-The constants come from unitree_rl_mjlab's g1_constants.py and its velocity task, so update them together.
+The robot's own numbers (joint order, standing pose, motor gains) are in the policy package's g1.py, shared with
+the controller. The solver settings here come from unitree_rl_mjlab's velocity task, so update them together.
 """
 import re
 
 import mujoco
 import numpy as np
 
+from policy import g1
+
 PHYSICS_DT = 0.005          # s, as in training (and the Mid-360's 200 Hz IMU)
 START_HEIGHT = 0.8          # m, pelvis height above the ground at spawn
 TERRAIN = np.array([1, 0, 0, 0, 0, 0], dtype=np.uint8)  # geom groups of the scene; the robot's are 2 (visual), 3
 
-# Actuators: each joint is a <position> actuator whose gains come from its motor's reflected inertia
-# (armature), a 10 Hz natural frequency and a damping ratio of 2.
-NATURAL_FREQ = 10 * 2.0 * 3.1415926535
-DAMPING_RATIO = 2.0
-
-
-def two_stage_planetary_armature(rotor, gears):
-    return rotor[0] * (gears[1] * gears[2]) ** 2 + rotor[1] * gears[2] ** 2 + rotor[2]
-
-
-ARMATURE_5020 = two_stage_planetary_armature((0.139e-4, 0.017e-4, 0.169e-4), (1, 1 + 46 / 18, 1 + 56 / 16))
-ARMATURE_7520_14 = two_stage_planetary_armature((0.489e-4, 0.098e-4, 0.533e-4), (1, 4.5, 1 + 48 / 22))
-ARMATURE_7520_22 = two_stage_planetary_armature((0.489e-4, 0.109e-4, 0.738e-4), (1, 4.5, 5))
-ARMATURE_4010 = two_stage_planetary_armature((0.068e-4, 0.0, 0.0), (1, 5, 5))
-MOTORS = (  # (joint names, armature, effort limit in N m). Waist pitch/roll and ankles are two 5020s each.
-    (r'.*_(elbow|shoulder_pitch|shoulder_roll|shoulder_yaw|wrist_roll)_joint', ARMATURE_5020, 25.0),
-    (r'.*_hip_pitch_joint|.*_hip_yaw_joint|waist_yaw_joint', ARMATURE_7520_14, 88.0),
-    (r'.*_hip_roll_joint|.*_knee_joint', ARMATURE_7520_22, 139.0),
-    (r'.*_wrist_(pitch|yaw)_joint', ARMATURE_4010, 5.0),
-    (r'waist_(pitch|roll)_joint|.*_ankle_(pitch|roll)_joint', 2 * ARMATURE_5020, 50.0),
-)
-# The standing pose (HOME_KEYFRAME); other joints are 0.
-DEFAULT_POSE = {
-    r'.*_hip_pitch_joint': -0.1, r'.*_knee_joint': 0.3, r'.*_ankle_pitch_joint': -0.2,
-    r'.*_shoulder_pitch_joint': 0.35, r'.*_elbow_joint': 0.87,
-    r'left_shoulder_roll_joint': 0.18, r'right_shoulder_roll_joint': -0.18,
-}
 FOOT_GEOM = r'(left|right)_foot[1-7]_collision'
-
-
-def match_one(table, name):
-    hits = [value for pattern, *value in table if re.fullmatch(pattern, name)]
-    if len(hits) != 1:
-        raise ValueError(f'{name} matches {len(hits)} entries, expected 1')
-    return hits[0]
+GANTRY = 'gantry'
 
 
 def hinge_names(model):
@@ -53,16 +23,7 @@ def hinge_names(model):
 
 
 def default_pose(model):
-    return np.array([next((v for p, v in DEFAULT_POSE.items() if re.fullmatch(p, n)), 0.0)
-                     for n in hinge_names(model)])
-
-
-def stiffness(model):
-    return np.array([match_one(MOTORS, n)[0] for n in hinge_names(model)]) * NATURAL_FREQ**2
-
-
-def effort(model):
-    return np.array([match_one(MOTORS, n)[1] for n in hinge_names(model)])
+    return g1.default_pose(hinge_names(model))
 
 
 def build_model(scene, description):
@@ -70,13 +31,14 @@ def build_model(scene, description):
     spec = mujoco.MjSpec.from_file(scene)
     robot = spec.body('pelvis')
 
-    # Position actuators without control limits, force-limited to the motor's effort limit.
+    # Position actuators without control limits, force-limited to the motor's effort limit. They start with
+    # the training gains; set_motor_commands replaces them with whatever /lowcmd asks for.
     for joint in spec.joints:
         if joint.type != mujoco.mjtJoint.mjJNT_HINGE:
             continue
-        armature, limit = match_one(MOTORS, joint.name)
-        kp = armature * NATURAL_FREQ**2
-        kd = 2.0 * DAMPING_RATIO * armature * NATURAL_FREQ
+        armature, limit = g1.motor(joint.name)
+        kp = armature * g1.NATURAL_FREQ**2
+        kd = 2.0 * g1.DAMPING_RATIO * armature * g1.NATURAL_FREQ
         actuator = spec.add_actuator(name=joint.name, target=joint.name)
         actuator.trntype = mujoco.mjtTrn.mjTRN_JOINT
         actuator.dyntype = mujoco.mjtDyn.mjDYN_NONE
@@ -115,11 +77,18 @@ def build_model(scene, description):
         spec.add_sensor(name=name, type=sensor.type, objtype=sensor.objtype, objname=sensor.objname,
                         noise=sensor.noise)
 
+    # The gantry: the pelvis welded to the world, switched on and placed by hold_on_gantry.
+    gantry = spec.add_equality(name=GANTRY, type=mujoco.mjtEq.mjEQ_WELD, objtype=mujoco.mjtObj.mjOBJ_BODY,
+                               name1='world', name2='pelvis')
+    gantry.active = False
+
     model = spec.compile()
     hinges = np.nonzero(model.jnt_type == mujoco.mjtJoint.mjJNT_HINGE)[0]
-    assert (model.actuator_trnid[:, 0] == hinges).all(), 'actuators must follow joint order, like the policy'
+    assert (model.actuator_trnid[:, 0] == hinges).all(), 'actuators must follow joint order'
+    assert hinge_names(model) == g1.JOINTS, 'joints must be in Unitree\'s motor order: actuator i is motor i'
 
-    # Unitree-G1-Flat's solver settings, with mjlab's defaults for the rest.
+    # Unitree-G1-Flat's solver settings, with mjlab's defaults for the rest. ccd_iterations is the rough-terrain
+    # tasks' 500 (flat uses 50): it only matters where a collision is hard to resolve.
     model.opt.timestep = PHYSICS_DT
     model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
     model.opt.cone = mujoco.mjtCone.mjCONE_PYRAMIDAL
@@ -129,9 +98,22 @@ def build_model(scene, description):
     model.opt.ls_iterations = 20
     model.opt.tolerance = 1e-8
     model.opt.ls_tolerance = 0.01
-    model.opt.ccd_iterations = 50
+    model.opt.ccd_iterations = 500
     model.opt.impratio = 1.0
     return model
+
+
+def set_motor_commands(model, data, q, dq, tau, kp, kd):
+    """Drive each motor as the real one obeys /lowcmd: torque = tau + kp (q - angle) + kd (dq - speed).
+
+    The gains go into the position actuators rather than a torque computed here, so MuJoCo integrates the damping
+    implicitly, as it did in training. With the training gains and dq = tau = 0 this is exactly training's motor.
+    """
+    model.actuator_gainprm[:, 0] = kp
+    model.actuator_biasprm[:, 0] = tau + kd * dq
+    model.actuator_biasprm[:, 1] = -kp
+    model.actuator_biasprm[:, 2] = -kd
+    data.ctrl[:] = q
 
 
 def ground_below(model, data, x, y, top=5.0):
@@ -158,6 +140,19 @@ def spawn(model, data, x, y, yaw):
     data.qvel[:] = 0.0
     mujoco.mj_forward(model, data)
     return ground
+
+
+def hold_on_gantry(model, data):
+    """Fix the pelvis where it is now, as the real gantry's strap does. The joints stay free to move."""
+    eq = model.equality(GANTRY)
+    eq.data[:] = 0.0
+    eq.data[3:10] = data.qpos[:7]   # the pelvis's pose in the world; before it, the weld point: the pelvis origin
+    eq.data[10] = 1.0               # torque scale
+    data.eq_active[eq.id] = 1
+
+
+def release_gantry(data):
+    data.eq_active[data.model.equality(GANTRY).id] = 0
 
 
 def sole_depth(model):

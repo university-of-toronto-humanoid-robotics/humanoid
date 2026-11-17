@@ -1,5 +1,5 @@
 # Up the LiDAR room's four 20 cm steps to the third, then back down, with the G1-Rough-HeightMap walker.
-# -p scan:=elevation_map feeds it the live elevation map instead of the true terrain.
+# scan:=elevation_map feeds it the live elevation map instead of the true terrain.
 scene: sim/g1_walk_scene.xml
 spawn: {x: 3.6, y: 2.5, yaw: 0.0}
 duration: 60.0
