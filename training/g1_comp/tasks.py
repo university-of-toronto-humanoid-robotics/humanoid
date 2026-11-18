@@ -54,6 +54,7 @@ from . import lanes, mdp, worlds
 from .actions import ArmOverrideJointPositionActionCfg
 from .camera import fpv_enabled, head_camera_cfg
 from .commands import BaseHeightCommandCfg
+from .env_cfgs import g1_rough_heightmap_env_cfg, g1_rough_heightmap_ppo_runner_cfg
 from .map_noise import MapNoiseCfg
 from .scan import terrain_heights, terrain_heights_clean
 from .sensors import (
@@ -80,6 +81,7 @@ OPEN_SPEEDS = dict(lin_vel_x=(-0.5, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-1.0
 LANE_SPEEDS = dict(lin_vel_x=(-0.2, 0.8), lin_vel_y=(-0.3, 0.3), ang_vel_z=(-1.0, 1.0))
 LANE_SHARE = 0.9  # lanes: share of robots told to walk along the lane (the rest: any heading)
 START_LEVEL = 1  # hardest terrain row a robot may start on (rows 0-9); they earn the rest
+OPEN_HEIGHTMAP_ARM_POSE_WEIGHT = -0.5  # keep shoulders and elbows near their default pose
 
 # --- Height map and rewards (as in the G1-Comp-* tasks; see training/README.md) ----
 # The height map reads terrain height relative to the feet (scan.py): 0 on flat
@@ -341,6 +343,47 @@ def open_env_cfg(play: bool = False, crouch: bool = False) -> ManagerBasedRlEnvC
   cfg = _base_cfg(play, crouch)
   _use_world(cfg, worlds.open_world_cfg(), play)
   _use_lanes(cfg, play)
+  return cfg
+
+
+def open_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Open lanes with the original G1-Rough-HeightMap policy layout.
+
+  Retain its pelvis-relative scan, observation order, and 29 joint actions.
+  Use Open's lane terrain and commands, with an extra arm posture penalty.
+  No crouch or arm-override terms are introduced.
+  """
+  cfg = g1_rough_heightmap_env_cfg(play=play)
+  cfg.rewards["arm_pose"] = RewardTermCfg(
+    func=mdp.arm_pose_deviation,
+    weight=OPEN_HEIGHTMAP_ARM_POSE_WEIGHT,
+    params={"asset_cfg": SceneEntityCfg(
+      "robot", joint_names=(r".*_shoulder_.*", r".*_elbow_joint")
+    )},
+  )
+  old_twist = cfg.commands["twist"]
+  assert isinstance(old_twist, UniformVelocityCommandCfg)
+  cfg.commands["twist"] = lanes.LaneVelocityCommandCfg(
+    entity_name=old_twist.entity_name,
+    resampling_time_range=old_twist.resampling_time_range,
+    debug_vis=old_twist.debug_vis,
+    heading_command=True,
+    heading_control_stiffness=old_twist.heading_control_stiffness,
+    rel_standing_envs=old_twist.rel_standing_envs,
+    rel_heading_envs=old_twist.rel_heading_envs,
+    ranges=old_twist.ranges,
+    viz=old_twist.viz,
+  )
+  cfg.curriculum.pop("command_vel", None)
+  _use_world(cfg, worlds.open_world_cfg(), play)
+  _use_lanes(cfg, play)
+  return cfg
+
+
+def open_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Keep the rough height-map MLP/PPO while logging this task separately."""
+  cfg = g1_rough_heightmap_ppo_runner_cfg()
+  cfg.experiment_name = "g1_open_heightmap"
   return cfg
 
 

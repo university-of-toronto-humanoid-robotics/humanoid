@@ -438,7 +438,7 @@ def g1_course_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   assert cfg.scene.terrain is not None
   cfg.scene.num_envs = 1
   cfg.scene.terrain.terrain_generator = course_terrains_cfg()
-  cfg.sim.nconmax = 128
+  cfg.sim.nconmax = 512  # one robot on the CAD course; observed contact demand exceeds 200
   cfg.seed = 42
   cfg.curriculum = {}
   for event in ("randomize_terrain", "foot_friction", "encoder_bias", "base_com"):

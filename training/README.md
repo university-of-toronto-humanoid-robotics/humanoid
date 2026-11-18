@@ -8,10 +8,44 @@ see [evaluation/README.md](evaluation/README.md).
 Two Colab notebooks serve different policy families:
 
 - [notebooks/train_colab.ipynb](notebooks/train_colab.ipynb) trains or continues
-  `G1-Flat-HeightMap` and `G1-Rough-HeightMap`, with Drive checkpoint selection
-  and W&B logging.
+  `G1-Flat-HeightMap`, `G1-Rough-HeightMap`, and `G1-Open-HeightMap`, with a
+  choice of bundled or Drive checkpoints and W&B logging.
 - [colab/train_g1.ipynb](colab/train_g1.ipynb) trains the new `Flat`, `Open`,
   `Competition`, and related tasks. Keep checkpoints within the same task family.
+
+### Fine-tune the existing rough height-map checkpoint on Open terrain
+
+`G1-Open-HeightMap` uses the same Open lanes, flat-patch spawning, lane velocity
+commands, and terrain progression as `Open`. Its policy and rewards come from
+`G1-Rough-HeightMap`: 791 actor inputs, 806 critic inputs, a pelvis-relative
+33 × 21 height scan, and 29 joint actions. It has no crouch command or arm
+override. It adds an `arm_pose` penalty (weight −0.5) for squared shoulder and
+elbow displacement from the default pose; the other height-map tasks keep their
+original rewards. The original `Open` task still uses its separate 793-input policy.
+
+In [the height-map Colab notebook](notebooks/train_colab.ipynb) or its
+[Drive-source version](notebooks/train_colab_drive.ipynb), select
+`G1-Open-HeightMap` and keep **Start from checkpoint** checked. Choose
+**Repository model** and `training/models/best_g1_rough_heightmap/model_5996.pt`
+for the first transfer. For another fine-tuning run, choose
+`training/models/g1_open_heightmap/model_6995.pt`; the notebooks select it by
+default when it is present in the source archive. Start with a small GPU run to
+measure memory before increasing `NUM_ENVS`; Open's walls and the older task's
+contact allocation can use substantially more memory than flat terrain. The
+new run saves under `MyDrive/humanoid/logs/rsl_rl/g1_open_heightmap/` and can
+later resume from a selected Drive checkpoint.
+
+To watch the starting policy on your Mac, activate `.venv-mjlab`, change to
+`training/`, and run:
+
+```bash
+mjpython scripts/play.py G1-Open-HeightMap --viewer native --device cpu --num-envs 1 \
+  --checkpoint-file models/best_g1_rough_heightmap/model_5996.pt
+```
+
+After fine-tuning, [the course route evaluator](evaluation/README.md) can
+load the new checkpoint with `--checkpoint` because it uses the same policy
+layout. The route evaluator's default checkpoint remains `model_5996.pt`.
 
 ## Quick start (copy, paste)
 
@@ -168,8 +202,9 @@ What each robot is doing at any moment while training: walking a commanded veloc
 | `G1-Comp-Crouch-Test` | Flat, 60% of robots standing, crouching and arm takeover from the start | Quick crouch check. `models/g1_comp_crouch/model_799.pt` came from it: crouches, doesn't walk |
 | `Unitree-G1-Flat`, `Unitree-G1-Rough` | Unitree's original tasks, no changes (Flat has no height map) | `models/g1_walk/` came from `Unitree-G1-Flat` |
 
-The earlier `G1-Flat-HeightMap` and `G1-Rough-HeightMap` tasks also remain
-registered. Their checkpoints have 791 actor inputs and work with each other;
+The earlier `G1-Flat-HeightMap`, `G1-Rough-HeightMap`, and
+`G1-Open-HeightMap` tasks share 791 actor inputs; their checkpoints work with
+each other. The Open variant uses the original policy layout on Open's lanes;
 `G1-Course-HeightMap` loads the same policy on the CAD course for route
 evaluation. The new `Flat`/`Open`/`Competition` family has 793 actor inputs
 and uses a foot-relative map, so its checkpoints cannot be loaded directly into

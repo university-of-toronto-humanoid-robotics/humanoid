@@ -20,6 +20,8 @@ ROOT = HERE.parents[1]
 HEIGHTMAP = ROOT / "sim" / "competition" / "course_heightmap.npz"
 ROUTE = HERE / "mobility_route.json"
 COURSE_START_XY = np.array([11.0, 4.21])
+RAMP_SPEED = 0.45  # m/s before the usual slowdown near a target
+STAIR_SPEED = 0.35  # m/s through the stairs after C2
 
 
 def obstacle_mask(heights: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -224,15 +226,20 @@ class RouteFollower:
     goal_id = next_goal["id"]
     goal_xy = np.array([next_goal["x"], next_goal["y"]])
     goal_distance = float(np.linalg.norm(goal_xy - cad_xy))
-    lookahead = 0.30 if 2.3 <= cad_xy[0] <= 3.8 or 9.3 <= cad_xy[0] <= 10.8 else 0.50
+    on_stairs = 2.3 <= cad_xy[0] <= 3.8
+    near_door = 9.3 <= cad_xy[0] <= 10.8
+    lookahead = 0.30 if on_stairs or near_door else 0.50
     target = path.point_at(min(self.progress_s + lookahead, path.goal_s[goal_id]))
     heading_error = math.atan2(math.sin(math.atan2(target[1] - cad_xy[1], target[0] - cad_xy[0]) - yaw),
                                math.cos(math.atan2(target[1] - cad_xy[1], target[0] - cad_xy[0]) - yaw))
+    on_ramps = 6.1 <= cad_xy[0] <= 8.6
     speed = 0.35
-    if 2.3 <= cad_xy[0] <= 3.8 or 9.3 <= cad_xy[0] <= 10.8:
+    if near_door:
       speed = 0.18
-    elif 6.1 <= cad_xy[0] <= 8.6:
-      speed = 0.25
+    elif on_stairs:
+      speed = STAIR_SPEED
+    elif on_ramps:
+      speed = RAMP_SPEED
     speed *= float(np.clip(goal_distance / 0.40, 0.4, 1.0))
     if abs(heading_error) > 0.65:
       vx = vy = 0.0

@@ -34,13 +34,26 @@ python scripts/eval_course_route.py --viewer viser
 
 To watch without saving metrics or writing any evaluation files, add `--no-log`.
 
-Open the local URL printed by the script. Viser uses the next available port
+On macOS, use the native MuJoCo window to watch the route with the Open height-map checkpoint:
+
+```bash
+mjpython scripts/eval_course_route.py --viewer native --no-log \
+  --checkpoint models/g1_open_heightmap/model_6995.pt
+```
+
+The native window shows the outbound and return paths, target circles, and the
+current route target. Close the window to stop; use the viewer's reset control
+for another trial.
+
+For the Viser option, open the local URL printed by the script. Viser uses the next available port
 if 8080 is already occupied. The default checkpoint is
 `models/best_g1_rough_heightmap/model_5996.pt`; use `--checkpoint PATH` to
 choose another compatible model. The evaluator creates a dedicated
 `G1-Course-HeightMap` task with the same actor observations and 29 joint actions
 as `G1-Rough-HeightMap`. It loads the existing CAD course from `sim/competition/`
 without modifying any ROS or course assets.
+This also accepts a checkpoint fine-tuned on `G1-Open-HeightMap`; copy that
+`model_<N>.pt` from Drive to your Mac and pass its path with `--checkpoint`.
 Use Viser's Reset Environment button for another trial, or press Ctrl+C in
 the terminal to close the viewer and write the current trial summary.
 

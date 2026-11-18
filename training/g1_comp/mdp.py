@@ -23,6 +23,16 @@ if TYPE_CHECKING:
 _NO_GROUND = 1.0  # m; clearance reported when no ray under a foot hits anything
 
 
+def arm_pose_deviation(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+  """Squared shoulder and elbow displacement from the robot's default pose."""
+  robot = env.scene[asset_cfg.name]
+  joints = asset_cfg.joint_ids
+  return torch.sum(
+    torch.square(robot.data.joint_pos[:, joints] - robot.data.default_joint_pos[:, joints]),
+    dim=1,
+  )
+
+
 def foot_clearance(env: ManagerBasedRlEnv, sensor_names: tuple[str, ...]) -> torch.Tensor:
   """Height of each foot above the highest ground point under its sole. [B, F]
 
