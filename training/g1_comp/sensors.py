@@ -22,6 +22,7 @@ SCAN_FORWARD = 0.3  # m; grid center ahead of the pelvis: 0.5 m behind to 1.1 m 
 SCAN_LIFT = 2.0  # m; rays start this far above the pelvis
 TERRAIN_GROUPS = (0,)  # terrain geoms; robot visuals are group 2, robot collisions group 3
 FOOT_SENSOR_NAMES = ("left_foot_ground", "right_foot_ground")
+BEAM_SENSOR_NAMES = ("left_foot_beam", "right_foot_beam")
 FOOT_PATCH_SIZE = (0.2, 0.08)  # m, along x across; covers the sole (foot site is at its center)
 FOOT_PATCH_RESOLUTION = 0.04  # m -> 6 x 3 rays
 
@@ -79,4 +80,21 @@ def foot_ground_sensor_cfgs() -> tuple[RayCastSensorCfg, ...]:
       debug_vis=False,
     )
     for side, name in zip(("left", "right"), FOOT_SENSOR_NAMES, strict=True)
+  )
+
+
+def foot_beam_sensor_cfgs() -> tuple[RayCastSensorCfg, ...]:
+  """Ray patches over the soles that see only step-over beams (geom group 1)."""
+  return tuple(
+    RayCastSensorCfg(
+      name=name,
+      frame=ObjRef(type="site", name=f"{side}_foot", entity="robot"),
+      ray_alignment="yaw",
+      pattern=RaisedGridPatternCfg(size=FOOT_PATCH_SIZE, resolution=FOOT_PATCH_RESOLUTION, lift=0.5),
+      max_distance=3.0,
+      exclude_parent_body=True,
+      include_geom_groups=(1,),
+      debug_vis=False,
+    )
+    for side, name in zip(("left", "right"), BEAM_SENSOR_NAMES, strict=True)
   )

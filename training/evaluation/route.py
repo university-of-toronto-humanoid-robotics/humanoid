@@ -21,7 +21,10 @@ HEIGHTMAP = ROOT / "sim" / "competition" / "course_heightmap.npz"
 ROUTE = HERE / "mobility_route.json"
 COURSE_START_XY = np.array([11.0, 4.21])
 RAMP_SPEED = 0.45  # m/s before the usual slowdown near a target
-STAIR_SPEED = 0.35  # m/s through the stairs after C2
+STAIR_SPEED = 0.30  # m/s through the stairs after C2
+CRUISE_SPEED = 0.30  # m/s on the rest of the route
+SPEED_KP = 0.8
+SPEED_FILTER_SECONDS = 0.30
 
 
 def obstacle_mask(heights: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -194,6 +197,8 @@ class RouteFollower:
     self.phase = "outbound"
     self.progress_s = 0.0
     self.goal_index = 0
+    self.target_vx = 0.0
+    self.filtered_vx: float | None = None
 
   def _goals(self) -> list[dict]:
     points = self.route["waypoints"]
@@ -201,7 +206,8 @@ class RouteFollower:
       return [p for p in points[1:] if p["kind"] in {"goal", "end"}]
     return [p for p in reversed(points[:-1]) if p["kind"] in {"goal", "start"}]
 
-  def update(self, cad_xy: np.ndarray, yaw: float) -> Command:
+  def update(self, cad_xy: np.ndarray, yaw: float, measured_vx: float | None = None,
+             dt: float = 0.02) -> Command:
     if self.phase == "complete":
       return Command(0, 0, 0, 0, 1, "complete", None)
     goals = self._goals()
@@ -233,7 +239,7 @@ class RouteFollower:
     heading_error = math.atan2(math.sin(math.atan2(target[1] - cad_xy[1], target[0] - cad_xy[0]) - yaw),
                                math.cos(math.atan2(target[1] - cad_xy[1], target[0] - cad_xy[0]) - yaw))
     on_ramps = 6.1 <= cad_xy[0] <= 8.6
-    speed = 0.35
+    speed = CRUISE_SPEED
     if near_door:
       speed = 0.18
     elif on_stairs:
@@ -246,6 +252,18 @@ class RouteFollower:
     else:
       vx = float(np.clip(speed * math.cos(heading_error), 0.0, 1.0))
       vy = float(np.clip(speed * math.sin(heading_error), -0.3, 0.3))
+    self.target_vx = vx
+    if vx > 0 and measured_vx is not None:
+      # Filter gait oscillations before feeding body-frame speed back to the route follower.
+      if self.filtered_vx is None:
+        self.filtered_vx = vx  # start at the target to avoid a launch-time jump
+      else:
+        alpha = 1.0 - math.exp(-dt / SPEED_FILTER_SECONDS)
+        self.filtered_vx += alpha * (measured_vx - self.filtered_vx)
+      max_vx = 0.30 if near_door else 0.80
+      vx = float(np.clip(vx + SPEED_KP * (vx - self.filtered_vx), 0.0, max_vx))
+    else:
+      self.filtered_vx = None
     yaw_rate = float(np.clip(2.0 * heading_error, -1.0, 1.0))
     fraction = (self.progress_s + (path.length if self.phase == "return" else 0.0)) / (2 * path.length)
     return Command(vx, vy, yaw_rate, cross_track, float(fraction), self.phase, goal_id)

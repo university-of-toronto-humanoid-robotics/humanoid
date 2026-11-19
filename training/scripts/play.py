@@ -19,7 +19,28 @@ Two options of ours, for the new tasks (Flat, Ramp, Stairs, Open, ...):
 
 import os
 import runpy
+import secrets
 import sys
+
+_PLAY_ARGV = sys.argv.copy()
+
+if "--terrain-level" in sys.argv:
+  task = sys.argv[1].removesuffix("-Crouch") if len(sys.argv) > 1 else ""
+  if task not in {"G1-Open-HeightMap", "Open", "Ramp", "Stairs"}:
+    raise SystemExit("--terrain-level is supported for Open, Ramp, Stairs, and G1-Open-HeightMap")
+  index = sys.argv.index("--terrain-level")
+  if index + 1 >= len(sys.argv):
+    raise SystemExit("--terrain-level needs a number from 0 to 9")
+  try:
+    level = int(sys.argv[index + 1])
+  except ValueError as exc:
+    raise SystemExit("--terrain-level needs a number from 0 to 9") from exc
+  if not 0 <= level <= 9:
+    raise SystemExit("--terrain-level needs a number from 0 to 9")
+  os.environ["G1_PLAY_TERRAIN_LEVEL"] = str(level)
+  os.environ.setdefault("G1_PLAY_TERRAIN_SEED", str(secrets.randbits(32)))
+  print(f"[INFO] Level {level} lane seed: {os.environ['G1_PLAY_TERRAIN_SEED']}")
+  del sys.argv[index:index + 2]
 
 for flag in ("--fpv", "--ros"):
   if flag in sys.argv:
@@ -29,6 +50,49 @@ for flag in ("--fpv", "--ros"):
       os.environ["G1_ROS"] = "1"
 
 import _setup  # noqa: E402
+
+if "G1_PLAY_TERRAIN_LEVEL" in os.environ:
+  # The upstream player creates the environment before starting the viewer.
+  # Reset it once after construction so the first rendered pose uses a lane
+  # spawn patch rather than the default robot pose at the world origin.
+  import mjlab.envs as _mjlab_envs
+
+  class _ResetOnPlayEnv(_mjlab_envs.ManagerBasedRlEnv):
+    def __init__(self, *args, **kwargs):
+      super().__init__(*args, **kwargs)
+      self.reset()
+
+  _mjlab_envs.ManagerBasedRlEnv = _ResetOnPlayEnv
+
+  import mjlab.viewer as _mjlab_viewer
+  from mjlab.viewer.base import ViewerAction
+
+  class _RegeneratingViser(_mjlab_viewer.ViserPlayViewer):
+    def setup(self):
+      super().setup()
+      with self._server.gui.add_folder("Terrain"):
+        new_seed_button = self._server.gui.add_button("New Lane Seed")
+
+        @new_seed_button.on_click
+        def _(_):
+          self.request_action("CUSTOM", "new_lane_seed")
+
+    def _handle_custom_action(self, action, payload):
+      if action != ViewerAction.CUSTOM or payload != "new_lane_seed":
+        return super()._handle_custom_action(action, payload)
+      old_seed = os.environ.get("G1_PLAY_TERRAIN_SEED")
+      new_seed = str(secrets.randbits(32))
+      while new_seed == old_seed:
+        new_seed = str(secrets.randbits(32))
+      new_env = os.environ.copy()
+      new_env["G1_PLAY_TERRAIN_SEED"] = new_seed
+      print(f"[INFO] Generating a new lane (seed {new_seed}); Viser will reconnect.", flush=True)
+      self.close()
+      self.env.close()
+      os.execvpe(sys.executable, [sys.executable, *_PLAY_ARGV], new_env)
+      return True
+
+  _mjlab_viewer.ViserPlayViewer = _RegeneratingViser
 
 if os.environ.get("G1_ROS") == "1":
   from g1_comp.camera import attach_ros_bridge

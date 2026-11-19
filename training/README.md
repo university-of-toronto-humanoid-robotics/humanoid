@@ -21,7 +21,14 @@ commands, and terrain progression as `Open`. Its policy and rewards come from
 33 × 21 height scan, and 29 joint actions. It has no crouch command or arm
 override. It adds an `arm_pose` penalty (weight −0.5) for squared shoulder and
 elbow displacement from the default pose; the other height-map tasks keep their
-original rewards. The original `Open` task still uses its separate 793-input policy.
+original rewards. It also adds a beam-specific clearance penalty (weight −2):
+when a moving foot is over a step-over beam, it is penalized for being less than
+12 cm above the beam; foot contact in that beam patch adds a further penalty.
+The existing terrain clearance reward remains in place. Beam-only foot rays
+identify step-over beams, while the normal height scan still sees them. This
+does not change the 791 actor inputs, 806 critic inputs, or 29 actions, so
+existing Open height-map checkpoints remain compatible. The original `Open`
+task still uses its separate 793-input policy.
 
 In [the height-map Colab notebook](notebooks/train_colab.ipynb) or its
 [Drive-source version](notebooks/train_colab_drive.ipynb), select
@@ -42,6 +49,22 @@ To watch the starting policy on your Mac, activate `.venv-mjlab`, change to
 mjpython scripts/play.py G1-Open-HeightMap --viewer native --device cpu --num-envs 1 \
   --checkpoint-file models/best_g1_rough_heightmap/model_5996.pt
 ```
+
+To inspect a specific Open terrain difficulty, add `--terrain-level 0` through
+`--terrain-level 9`. Fixed-level playback generates one full-length lane with
+10 tiles at that training row's difficulty and spawns the robot on a flat patch
+near its beginning. In Viser, **Reset Environment** respawns the robot on the
+current lane. The separate **Terrain → New Lane Seed** button restarts the
+simulator with a new lane; the browser reconnects after the terrain and
+checkpoint load.
+The original random facing and two-way lane commands are used in playback and
+training. `G1-Open-HeightMap` resets the robot if its root leaves the lane grid
+or crosses the outer corridor boundary.
+The player prints the lane seed; set
+`G1_PLAY_TERRAIN_SEED` to reuse that exact terrain.
+Without the flag, playback uses a 4 × 5 random terrain sample whose rows are
+not curriculum levels. Fixed-level playback starts with the camera 3 m from
+the robot.
 
 After fine-tuning, [the course route evaluator](evaluation/README.md) can
 load the new checkpoint with `--checkpoint` because it uses the same policy

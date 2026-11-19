@@ -88,6 +88,9 @@ class RouteEvaluation:
     self.last_cross_track = 0.0
     self.progress = 0.0
     self.next_goal = "A1"
+    self.measured_vx = 0.0
+    self.target_vx = 0.0
+    self.command_vx = 0.0
     self.foot_hits: dict[str, list[dict]] = {"outbound": [], "return": []}
     self._seen: dict[str, set[str]] = {"outbound": set(), "return": set()}
     if self.record_metrics:
@@ -96,7 +99,8 @@ class RouteEvaluation:
       self._csv_file = (self.output / f"trial_{self.trial_no:03d}.csv").open("w", newline="")
       self.writer = csv.writer(self._csv_file)
       self.writer.writerow(("time_s", "phase", "cad_x", "cad_y", "heading_rad", "progress",
-                            "cross_track_m", "next_goal", "cmd_vx", "cmd_vy", "cmd_yaw"))
+                            "cross_track_m", "next_goal", "target_vx", "measured_vx",
+                            "cmd_vx", "cmd_vy", "cmd_yaw"))
     self._write_command(0, 0, 0)
 
   def _check_foot_targets(self) -> None:
@@ -129,7 +133,10 @@ class RouteEvaluation:
     if self.record_metrics:
       self._check_foot_targets()
     yaw = float(self.robot.data.heading_w[0].item())
-    command = self.follower.update(cad_xy, yaw)
+    self.measured_vx = float(self.robot.data.root_link_lin_vel_b[0, 0].item())
+    command = self.follower.update(cad_xy, yaw, self.measured_vx, self.base.step_dt)
+    self.target_vx = self.follower.target_vx
+    self.command_vx = command.vx
     self.progress = command.progress
     self.next_goal = command.next_goal
     if command.phase == "complete":
@@ -150,7 +157,8 @@ class RouteEvaluation:
       self.writer.writerow((round((self.step_count - 1) * self.base.step_dt, 3), command.phase,
                             round(float(cad_xy[0]), 4), round(float(cad_xy[1]), 4),
                             round(yaw, 4), round(command.progress, 5), round(error, 4),
-                            command.next_goal, round(command.vx, 4), round(command.vy, 4),
+                            command.next_goal, round(self.target_vx, 4), round(self.measured_vx, 4),
+                            round(command.vx, 4), round(command.vy, 4),
                             round(command.yaw_rate, 4)))
     if bool(dones[0].item()):
       self.finish("fall" if bool(self.base.reset_terminated[0].item()) else "env_timeout")
@@ -164,6 +172,8 @@ class RouteEvaluation:
     if self.status != "running":
       return
     self.status = status
+    self.target_vx = 0.0
+    self.command_vx = 0.0
     self._write_command(0, 0, 0)
     if not self.record_metrics:
       print(f"Trial {self.trial_no}: {status}")
@@ -246,6 +256,8 @@ class RouteViewer(ViserPlayViewer):
       f"<b>Phase:</b> {ev.follower.phase}<br>"
       f"<b>Next target:</b> {ev.next_goal or '—'}<br>"
       f"<b>Progress:</b> {ev.progress:.1%}<br>"
+      f"<b>Forward speed (target / measured / command):</b> "
+      f"{ev.target_vx:.2f} / {ev.measured_vx:.2f} / {ev.command_vx:.2f} m/s<br>"
     )
     if ev.record_metrics:
       info += (
@@ -336,9 +348,10 @@ class NativeRouteViewer(NativeMujocoViewer):
     viewer.set_texts((
       mujoco.mjtFontScale.mjFONTSCALE_150.value,
       mujoco.mjtGridPos.mjGRID_TOPLEFT.value,
-      "Status\nPhase\nNext target\nProgress\nTime",
+      "Status\nPhase\nNext target\nProgress\nSpeed target / actual / command\nTime",
       f"{ev.status}\n{ev.follower.phase}\n{ev.next_goal or '—'}\n"
-      f"{ev.progress:.1%}\n{ev.step_count * ev.base.step_dt:.1f} s",
+      f"{ev.progress:.1%}\n{ev.target_vx:.2f} / {ev.measured_vx:.2f} / {ev.command_vx:.2f} m/s\n"
+      f"{ev.step_count * ev.base.step_dt:.1f} s",
     ))
 
   def _execute_step(self) -> bool:

@@ -46,6 +46,26 @@ class RouteTests(unittest.TestCase):
     aligned = follower.update(start, 2.0)
     self.assertGreater(aligned.vx, 0.0)
 
+  def test_speed_feedback_raises_command_when_stalled(self) -> None:
+    follower = RouteFollower(self.route, self.outbound, self.returning)
+    start = np.array([11.0, 4.21])
+    turning = follower.update(start, np.pi, measured_vx=0.0, dt=0.1)
+    self.assertEqual(turning.vx, 0.0)
+    follower.update(start, 2.0, measured_vx=0.0, dt=0.1)
+    for _ in range(10):
+      command = follower.update(start, 2.0, measured_vx=0.0, dt=0.1)
+    self.assertGreater(command.vx, follower.target_vx)
+    self.assertLessEqual(command.vx, 0.8)
+
+  def test_speed_feedback_reduces_command_when_faster_than_target(self) -> None:
+    follower = RouteFollower(self.route, self.outbound, self.returning)
+    start = np.array([11.0, 4.21])
+    follower.update(start, 2.0, measured_vx=1.0, dt=0.1)
+    for _ in range(10):
+      command = follower.update(start, 2.0, measured_vx=1.0, dt=0.1)
+    self.assertLess(command.vx, follower.target_vx)
+    self.assertGreaterEqual(command.vx, 0.0)
+
 
 if __name__ == "__main__":
   unittest.main()

@@ -64,6 +64,13 @@ velocity commands at each 0.02 s policy step. At the ending location it turns
 around and follows the same path back. The Viser route overlay and results
 both use CAD-frame waypoint coordinates.
 
+The forward speed target is 0.30 m/s on ordinary ground and stairs, 0.45 m/s
+on ramps, and 0.18 m/s near the doorway; it slows near a target circle. The
+follower compares that target with the robot's filtered body-frame forward
+speed and adds proportional correction (gain 0.8). Forward commands are capped
+at 0.80 m/s, or 0.30 m/s by the door. The viewer shows target, measured, and
+commanded forward speeds so you can tell when the robot is stalled.
+
 Results go to `training/logs/route_eval/<timestamp>/`: one CSV of step-by-step
 pose, commands, progress, and path error, one JSON summary of time, falls, and
 foot target hits, and a copy of the route JSON. A target hit requires a foot

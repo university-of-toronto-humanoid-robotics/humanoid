@@ -99,3 +99,26 @@ def lane_terrain_levels(
     move_down = distance < torch.norm(command[env_ids, :2], dim=1) * env.max_episode_length_s * 0.5
     terrain.update_env_origins(env_ids, move_up, move_down & ~move_up)
   return torch.mean(terrain.terrain_levels.float())
+
+
+def spawn_at_lane_start(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None) -> None:
+  """Start fixed-difficulty playback at the first tile of its long lane."""
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)
+  terrain = env.scene.terrain
+  assert terrain is not None and terrain.terrain_origins is not None
+  terrain.terrain_levels[env_ids] = 0
+  terrain.terrain_types[env_ids] = 0
+  terrain.env_origins[env_ids] = terrain.terrain_origins[0, 0]
+
+
+def outside_lane_bounds(
+  env: ManagerBasedRlEnv, half_length: float, half_width: float
+) -> torch.Tensor:
+  """End an episode when the root leaves the lane grid or its corridor."""
+  terrain = env.scene.terrain
+  assert terrain is not None and terrain.env_origins is not None
+  pos = env.scene["robot"].data.root_link_pos_w[:, :2]
+  return (pos[:, 0].abs() > half_length) | (
+    (pos[:, 1] - terrain.env_origins[:, 1]).abs() > half_width
+  )

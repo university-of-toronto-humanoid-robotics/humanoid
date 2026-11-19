@@ -74,6 +74,39 @@ def feet_clearance_terrain(
   return cost
 
 
+def feet_clearance_over_beams(
+  env: ManagerBasedRlEnv,
+  sensor_names: tuple[str, ...],
+  target_height: float,
+  contact_sensor_name: str,
+  contact_cost: float,
+  asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Penalize low moving feet and foot contact over step-over beams only.
+
+  Beam-only ray patches distinguish the beams from ramps, stairs, and floor.
+  The term is zero where no beam lies under the sole; the policy still receives
+  its usual terrain clearance reward everywhere else.
+  """
+  robot = env.scene[asset_cfg.name]
+  foot_z = robot.data.site_pos_w[:, asset_cfg.site_ids, 2]
+  speed = torch.norm(robot.data.site_lin_vel_w[:, asset_cfg.site_ids, :2], dim=-1)
+  contact: ContactSensor = env.scene[contact_sensor_name]
+  assert contact.data.found is not None
+  costs = []
+  for foot, name in enumerate(sensor_names):
+    rays: RayCastSensor = env.scene[name]
+    hit_z = torch.where(rays.data.distances >= 0, rays.data.hit_pos_w[..., 2], -torch.inf)
+    beam_z = hit_z.amax(dim=1)
+    over_beam = torch.isfinite(beam_z)
+    beam_z = torch.where(over_beam, beam_z, foot_z[:, foot])
+    shortfall = torch.relu(target_height - (foot_z[:, foot] - beam_z))
+    costs.append(
+      torch.where(over_beam, shortfall * speed[:, foot] + contact_cost * contact.data.found[:, foot].float(), 0.0)
+    )
+  return torch.stack(costs, dim=1).sum(dim=1)
+
+
 # --- Crouch command and arm override -----------------------------------------
 
 

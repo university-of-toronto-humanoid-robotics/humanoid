@@ -111,9 +111,10 @@ class _Part:
 class _Tile:
   """Collects the geoms of one tile."""
 
-  def __init__(self, spec: mujoco.MjSpec, yc: float, w: float):
+  def __init__(self, spec: mujoco.MjSpec, yc: float, w: float, beam_group: int = 0):
     self.spec, self.body = spec, spec.body("terrain")
     self.yc, self.w = yc, w
+    self.beam_group = beam_group
     self.geoms: list[TerrainGeometry] = []
     self.meshes: dict[tuple, str] = {}
 
@@ -137,6 +138,7 @@ class _Tile:
       size=(math.hypot(b[0] - a[0], b[1] - a[1]) / 2 + 0.06, BEAM_WIDTH / 2, (top - _BOTTOM) / 2),
       pos=((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (top + _BOTTOM) / 2),
       quat=(math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)),
+      group=self.beam_group,
     )
     self.geoms.append(TerrainGeometry(geom=geom, color=_color("beam")))
 
@@ -253,6 +255,8 @@ class LaneTerrainCfg(SubTerrainCfg):
   """Which parts may appear (ramps, stairs, beams, sill), and how often relative to each other."""
   lane_width_range: tuple[float, float] = (0.9, LANE_WIDTH)
   """Lane width between the walls. Harder tiles lean toward the narrow end."""
+  beam_group: int = 0
+  """Geometry group used by beam-only foot sensors in the height-map task."""
   num_spawns: int = 8
   """Flat spots per tile where robots may start (between the parts, and on stair landings)."""
   size: tuple[float, float] = TILE_SIZE
@@ -265,7 +269,7 @@ class LaneTerrainCfg(SubTerrainCfg):
     length, width = self.size
     lo, hi = self.lane_width_range
     w = lo + (hi - lo) * rng.uniform() * (1.0 - 0.6 * d)  # harder tiles: narrower lanes
-    tile = _Tile(spec, width / 2, w)
+    tile = _Tile(spec, width / 2, w, beam_group=self.beam_group)
     tile.geoms.append(
       TerrainGeometry(geom=make_plane(tile.body, self.size, 0.0, center_zero=False)[0], color=_color("floor"))
     )
@@ -330,13 +334,13 @@ def stairs_world_cfg() -> TerrainGeneratorCfg:
   return _lanes({"stairs": LaneTerrainCfg(features={"stairs": 1.0}, lane_width_range=(STAIR_WIDTH, 1.5))}, 7)
 
 
-def open_world_cfg() -> TerrainGeneratorCfg:
+def open_world_cfg(beam_group: int = 0) -> TerrainGeneratorCfg:
   """Every part of the course in random order: ramps, stairs, step-over beams and
   the door sill, in lanes from 0.9 m to the course's 2.44 m wide. Some lanes are
   all stairs or all ramps, so neither is ever rare."""
   return _lanes(
     {
-      "mixed": LaneTerrainCfg(proportion=0.5),
+      "mixed": LaneTerrainCfg(proportion=0.5, beam_group=beam_group),
       "stairs": LaneTerrainCfg(proportion=0.25, features={"stairs": 1.0}, lane_width_range=(STAIR_WIDTH, 1.5)),
       "ramps": LaneTerrainCfg(proportion=0.25, features={"ramps": 1.0}, lane_width_range=(2 * RAMP_TILE, LANE_WIDTH)),
     },

@@ -43,6 +43,7 @@ from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.terrains import TerrainGeneratorCfg
@@ -58,12 +59,14 @@ from .env_cfgs import g1_rough_heightmap_env_cfg, g1_rough_heightmap_ppo_runner_
 from .map_noise import MapNoiseCfg
 from .scan import terrain_heights, terrain_heights_clean
 from .sensors import (
+  BEAM_SENSOR_NAMES,
   FOOT_PATCH_RESOLUTION,
   FOOT_PATCH_SIZE,
   FOOT_SENSOR_NAMES,
   SCAN_RESOLUTION,
   SCAN_SIZE,
   foot_ground_sensor_cfgs,
+  foot_beam_sensor_cfgs,
   grid_shape,
   terrain_scan_cfg,
 )
@@ -268,11 +271,24 @@ def _base_cfg(play: bool, crouch: bool) -> ManagerBasedRlEnvCfg:
 def _use_world(cfg: ManagerBasedRlEnvCfg, world: TerrainGeneratorCfg, play: bool) -> None:
   """Put a generated world under the robots. Training: robots start on the easy
   rows and move up as they succeed. Play: a small random sample of the world."""
+  fixed_level = os.environ.get("G1_PLAY_TERRAIN_LEVEL") if play else None
   world.curriculum = not play
   if play:
-    world.num_rows, world.num_cols = 4, 5
-    # Contacts allocated per robot (training keeps Unitree's 48: memory grows with it).
-    cfg.sim.nconmax = 128
+    if fixed_level is None:
+      world.num_rows, world.num_cols = 4, 5
+    else:
+      # Keep the full 10-tile lane length, with one column instead of eleven.
+      # Every tile is sampled at the selected training difficulty.
+      level = int(fixed_level)
+      world.num_rows, world.num_cols = 10, 1
+      world.difficulty_range = (level / 10, (level + 1) / 10)
+      if seed := os.environ.get("G1_PLAY_TERRAIN_SEED"):
+        world.seed = int(seed)
+    # The default robot pose can overlap a part before the first lane reset.
+    # Reserve enough contacts for that initial MuJoCo Warp conversion.
+    cfg.sim.nconmax = 512 if fixed_level is not None else 128
+    if fixed_level is not None:
+      cfg.viewer.distance = 3.0
   assert cfg.scene.terrain is not None
   cfg.scene.terrain.terrain_generator = world
   cfg.scene.terrain.max_init_terrain_level = START_LEVEL
@@ -286,6 +302,7 @@ def _use_lanes(cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
   twist.lane_prob = LANE_SHARE
   twist.rel_heading_envs = 0.9  # turning on the spot in a 0.8 m corridor: rarely
   twist.ranges = UniformVelocityCommandCfg.Ranges(heading=(-math.pi, math.pi), **LANE_SPEEDS)
+  fixed_level = play and os.environ.get("G1_PLAY_TERRAIN_LEVEL") is not None
   spawn = EventTermCfg(
     func=envs_mdp.reset_root_state_from_flat_patches,
     mode="reset",
@@ -294,6 +311,10 @@ def _use_lanes(cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
   # Order matters: pick the tile (play only), place the robot, then note where it starts.
   events = dict(cfg.events)
   first = {k: events.pop(k) for k in ("randomize_terrain",) if k in events}
+  if fixed_level:
+    first["randomize_terrain"] = EventTermCfg(
+      func=lanes.spawn_at_lane_start, mode="reset"
+    )
   events.pop("reset_base", None)
   cfg.events = {
     **first,
@@ -354,12 +375,30 @@ def open_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   No crouch or arm-override terms are introduced.
   """
   cfg = g1_rough_heightmap_env_cfg(play=play)
+  # Only this task tags step-over beams as geom group 1. Keep them in the
+  # existing height scan and foot-ground rays, then add beam-only sole rays.
+  assert cfg.scene.sensors is not None
+  for sensor in cfg.scene.sensors:
+    if sensor.name in {"terrain_scan", *FOOT_SENSOR_NAMES}:
+      sensor.include_geom_groups = (0, 1)
+  cfg.scene.sensors += foot_beam_sensor_cfgs()
   cfg.rewards["arm_pose"] = RewardTermCfg(
     func=mdp.arm_pose_deviation,
     weight=OPEN_HEIGHTMAP_ARM_POSE_WEIGHT,
     params={"asset_cfg": SceneEntityCfg(
       "robot", joint_names=(r".*_shoulder_.*", r".*_elbow_joint")
     )},
+  )
+  cfg.rewards["beam_clearance"] = RewardTermCfg(
+    func=mdp.feet_clearance_over_beams,
+    weight=-2.0,
+    params={
+      "sensor_names": BEAM_SENSOR_NAMES,
+      "target_height": 0.12,
+      "contact_sensor_name": "feet_ground_contact",
+      "contact_cost": 1.0,
+      "asset_cfg": SceneEntityCfg("robot", site_names=("left_foot", "right_foot")),
+    },
   )
   old_twist = cfg.commands["twist"]
   assert isinstance(old_twist, UniformVelocityCommandCfg)
@@ -375,8 +414,16 @@ def open_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     viz=old_twist.viz,
   )
   cfg.curriculum.pop("command_vel", None)
-  _use_world(cfg, worlds.open_world_cfg(), play)
+  _use_world(cfg, worlds.open_world_cfg(beam_group=1), play)
   _use_lanes(cfg, play)
+  assert cfg.scene.terrain is not None
+  world = cfg.scene.terrain.terrain_generator
+  assert world is not None
+  cfg.terminations["lane_bounds"] = TerminationTermCfg(
+    func=lanes.outside_lane_bounds,
+    params={"half_length": world.num_rows * world.size[0] / 2 + 0.15,
+            "half_width": worlds.LANE_WIDTH / 2 + 0.15},
+  )
   return cfg
 
 
