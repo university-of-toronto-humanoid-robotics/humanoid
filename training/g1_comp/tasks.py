@@ -292,6 +292,13 @@ def _use_world(cfg: ManagerBasedRlEnvCfg, world: TerrainGeneratorCfg, play: bool
   assert cfg.scene.terrain is not None
   cfg.scene.terrain.terrain_generator = world
   cfg.scene.terrain.max_init_terrain_level = START_LEVEL
+  if not play and (selected := os.environ.get("G1_TRAIN_START_LEVEL")) is not None:
+    level = int(selected)
+    if not 0 <= level < world.num_rows:
+      raise ValueError(f"G1_TRAIN_START_LEVEL must be 0–{world.num_rows - 1}")
+    cfg.events["start_terrain_level"] = EventTermCfg(
+      func=lanes.set_initial_terrain_level, mode="startup", params={"level": level}
+    )
 
 
 def _use_lanes(cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
@@ -431,6 +438,56 @@ def open_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   """Keep the rough height-map MLP/PPO while logging this task separately."""
   cfg = g1_rough_heightmap_ppo_runner_cfg()
   cfg.experiment_name = "g1_open_heightmap"
+  return cfg
+
+
+def open_maze_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Winding, walled Open lanes; same policy inputs and actions as Open-HeightMap."""
+  cfg = open_heightmap_env_cfg(play=play)
+  _use_world(cfg, worlds.maze_world_cfg(preview_start_only=play), play)
+  assert cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None
+  world = cfg.scene.terrain.terrain_generator
+  fixed_level = int(os.environ["G1_PLAY_TERRAIN_LEVEL"]) if play and "G1_PLAY_TERRAIN_LEVEL" in os.environ else None
+  twist = cfg.commands["twist"]
+  assert isinstance(twist, lanes.LaneVelocityCommandCfg)
+  cfg.commands["twist"] = lanes.MazeVelocityCommandCfg(
+    entity_name=twist.entity_name,
+    resampling_time_range=twist.resampling_time_range,
+    debug_vis=twist.debug_vis,
+    heading_command=True,
+    heading_control_stiffness=1.5,
+    rel_standing_envs=0.0,
+    rel_heading_envs=1.0,
+    ranges=UniformVelocityCommandCfg.Ranges(
+      lin_vel_x=(0.0, 0.45), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1.5, 1.5), heading=(-math.pi, math.pi)
+    ),
+    viz=twist.viz,
+    lane_prob=1.0,
+    keep_direction_prob=1.0,
+    num_rows=world.num_rows,
+    tile_length=world.size[0],
+    fixed_level=fixed_level,
+  )
+  cfg.rewards["wall_proximity"] = RewardTermCfg(
+    func=mdp.maze_wall_proximity,
+    weight=-0.8,
+    params={
+      "asset_cfg": SceneEntityCfg("robot", body_names=(
+        "pelvis", "left_hip_yaw_link", "right_hip_yaw_link",
+        "left_knee_link", "right_knee_link", "left_elbow_link", "right_elbow_link",
+        "left_wrist_roll_link", "right_wrist_roll_link",
+      )),
+      "num_rows": world.num_rows,
+      "tile_length": world.size[0],
+      "fixed_level": fixed_level,
+    },
+  )
+  return cfg
+
+
+def open_maze_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = open_heightmap_ppo_runner_cfg()
+  cfg.experiment_name = "g1_open_maze_heightmap"
   return cfg
 
 

@@ -4,6 +4,7 @@ Importing this package registers:
   G1-Flat-HeightMap  original flat walking with a flattened height map
   G1-Rough-HeightMap  compatible rough terrain for the flat checkpoint
   G1-Open-HeightMap   Open lanes with that same checkpoint layout
+  G1-Open-Maze-HeightMap  winding lanes, ramps and beams with wall clearance
   G1-Course-HeightMap  competition course for that checkpoint
   G1-Comp-Flat    stage 1: walking only, on flat ground (fine-tune it on G1-Comp-Rough)
   G1-Comp-Rough   height-aware walking on rough terrain with competition-height stairs
@@ -12,7 +13,7 @@ Importing this package registers:
 
 Flat, Ramp, Stairs, Open, Rough, VeryRough, Competition and their -Crouch
 variants share the new policy layout. G1-Flat-HeightMap, G1-Rough-HeightMap,
-G1-Open-HeightMap, and G1-Course-HeightMap share the older height-map layout. G1-Comp-* is a
+G1-Open-HeightMap, G1-Open-Maze-HeightMap, and G1-Course-HeightMap share the older height-map layout. G1-Comp-* is a
 third layout. Checkpoints from different families are not interchangeable.
 Needs Unitree's code on the path (training/unitree_rl_mjlab); the scripts in
 training/scripts/ set that up.
@@ -34,7 +35,8 @@ from .env_cfgs import (
   g1_rough_heightmap_env_cfg,
   g1_rough_heightmap_ppo_runner_cfg,
 )
-from .tasks import TASKS, open_heightmap_env_cfg, open_heightmap_ppo_runner_cfg, runner_cfg
+from .tasks import (TASKS, open_heightmap_env_cfg, open_heightmap_ppo_runner_cfg,
+                    open_maze_heightmap_env_cfg, open_maze_heightmap_ppo_runner_cfg, runner_cfg)
 
 register_mjlab_task(
   task_id="G1-Flat-HeightMap",
@@ -57,6 +59,14 @@ register_mjlab_task(
   env_cfg=open_heightmap_env_cfg(),
   play_env_cfg=open_heightmap_env_cfg(play=True),
   rl_cfg=open_heightmap_ppo_runner_cfg(),
+  runner_cls=VelocityOnPolicyRunner,
+)
+
+register_mjlab_task(
+  task_id="G1-Open-Maze-HeightMap",
+  env_cfg=open_maze_heightmap_env_cfg(),
+  play_env_cfg=open_maze_heightmap_env_cfg(play=True),
+  rl_cfg=open_maze_heightmap_ppo_runner_cfg(),
   runner_cls=VelocityOnPolicyRunner,
 )
 

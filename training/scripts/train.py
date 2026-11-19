@@ -17,16 +17,34 @@ Saves to training/logs/rsl_rl/<experiment>/<date>_<run name>/. One GPU only:
 with --gpu-ids for several GPUs, the worker processes would not see our tasks.
 """
 
+import os
 import runpy
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
 
+start_terrain_level = None
+if "--start-terrain-level" in sys.argv:
+  index = sys.argv.index("--start-terrain-level")
+  if index + 1 >= len(sys.argv):
+    raise SystemExit("--start-terrain-level needs an integer from 0 to 9")
+  try:
+    start_terrain_level = int(sys.argv[index + 1])
+  except ValueError as exc:
+    raise SystemExit("--start-terrain-level needs an integer from 0 to 9") from exc
+  if not 0 <= start_terrain_level <= 9:
+    raise SystemExit("--start-terrain-level needs an integer from 0 to 9")
+  os.environ["G1_TRAIN_START_LEVEL"] = str(start_terrain_level)
+  del sys.argv[index:index + 2]
+
 import _setup
 import src.tasks  # noqa: F401  (registers Unitree's tasks)
-from mjlab.tasks.registry import load_rl_cfg
+from mjlab.tasks.registry import load_env_cfg, load_rl_cfg
 from g1_comp.tasks import TASKS
+
+if start_terrain_level is not None and "start_terrain_level" not in load_env_cfg(sys.argv[1]).events:
+  raise SystemExit("--start-terrain-level is supported for the Open height-map and lane tasks")
 
 
 # Samples the observation normalizer counts as "already seen" when continuing with

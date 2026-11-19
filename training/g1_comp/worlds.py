@@ -71,6 +71,31 @@ MAX_SILL = 0.085
 EASY_TREAD = 0.34  # treads on the easiest row; they shrink to STAIR_TREAD
 
 TILE_SIZE = (8.0, 3.2)  # m: length of lane in one tile, width of the tile (lane + walls)
+MAZE_GATE_X = ((2.00, 2.25), (5.25, 5.85))
+MAZE_LEAF_SIDES = (1, None)  # an open door leaf, then a plain offset wall opening
+MAZE_LEAF_REACH_X = 0.75
+MAZE_LEAF_SWING_Y = 0.58
+MAZE_LEAF_THICKNESS = 0.04
+
+
+def maze_lane_width(d):
+  return LANE_WIDTH
+
+
+def maze_gate_width(d):
+  return 1.43 - 0.53 * d  # 1.40 m at level 0, 0.93 m at level 9
+
+
+def maze_gate_offset(d):
+  return 0.10 + 0.40 * d  # alternating offset makes each doorway require steering
+
+
+def maze_leaf_endpoints(x0, center, opening, side):
+  """Hinge at one jamb; the open leaf projects toward the approaching robot."""
+  hinge_y = center - side * opening / 2
+  return (x0, hinge_y), (x0 - MAZE_LEAF_REACH_X, hinge_y + side * MAZE_LEAF_SWING_Y)
+
+
 _BOTTOM = -0.02  # parts start just below the floor
 _mesh_ids = itertools.count()
 
@@ -129,6 +154,17 @@ class _Tile:
       pos=((x0 + x1) / 2, (y0 + y1) / 2, (top + _BOTTOM) / 2),
     )
     self.geoms.append(TerrainGeometry(geom=geom, color=_color(kind, shade)))
+
+  def panel(self, a: tuple[float, float], b: tuple[float, float], top: float) -> None:
+    """A thin, upright collision panel, like the course's swung-open door leaf."""
+    yaw = math.atan2(b[1] - a[1], b[0] - a[0])
+    geom = self.body.add_geom(
+      type=mujoco.mjtGeom.mjGEOM_BOX,
+      size=(math.dist(a, b) / 2, MAZE_LEAF_THICKNESS / 2, (top - _BOTTOM) / 2),
+      pos=((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (top + _BOTTOM) / 2),
+      quat=(math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)),
+    )
+    self.geoms.append(TerrainGeometry(geom=geom, color=_color("wall", 1.35)))
 
   def beam(self, a: tuple[float, float], b: tuple[float, float], top: float) -> None:
     """A step-over beam from a to b (a rotated box)."""
@@ -346,6 +382,71 @@ def open_world_cfg(beam_group: int = 0) -> TerrainGeneratorCfg:
     },
     11,
   )
+
+
+@dataclass(kw_only=True)
+class MazeTerrainCfg(SubTerrainCfg):
+  """One corridor tile with offset doorways, a ramp and step-over beams."""
+
+  beam_group: int = 1
+  preview_start_only: bool = False
+  size: tuple[float, float] = TILE_SIZE
+
+  def __post_init__(self) -> None:
+    self.flat_patch_sampling = {"spawn": FlatPatchSamplingCfg(num_patches=8, patch_radius=0.25)}
+
+  def function(self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator) -> TerrainOutput:
+    # Quantize the corridor shape to the curriculum row. This lets the command
+    # generator and wall reward reproduce it without extra actor observations.
+    level = min(9, int(difficulty * 10))
+    d = (level + 0.5) / 10
+    length, width = self.size
+    lane_width = maze_lane_width(d)
+    opening = maze_gate_width(d)
+    offset = maze_gate_offset(d)
+    tile = _Tile(spec, width / 2, lane_width, beam_group=self.beam_group)
+    tile.geoms.append(
+      TerrainGeometry(geom=make_plane(tile.body, self.size, 0.0, center_zero=False)[0], color=_color("floor"))
+    )
+    lo, hi = tile.yc - lane_width / 2, tile.yc + lane_width / 2
+    tile.box("wall", 0, length, 0, lo, LANE_WALL_HEIGHT)
+    tile.box("wall", 0, length, hi, width, LANE_WALL_HEIGHT)
+    # The first passage resembles the course's open door; the second is a
+    # plain offset wall opening so every tile practices both situations.
+    for (x0, x1), center, side in zip(
+      MAZE_GATE_X, (tile.yc + offset, tile.yc - offset), MAZE_LEAF_SIDES, strict=True
+    ):
+      lower, upper = center - opening / 2, center + opening / 2
+      tile.box("wall", x0, x1, 0, lower, 1.5, shade=1.35)
+      tile.box("wall", x0, x1, upper, width, 1.5, shade=1.35)
+      tile.box("sill", x0, x1, lower, upper, _lerp(0.02, MAX_SILL, difficulty))
+      if side is not None:
+        tile.panel(*maze_leaf_endpoints(x0, center, opening, side), top=1.5)
+
+    # A short two-tile hill and two step-over beams occupy the open gaps.
+    low = RAMP_BASE * difficulty
+    high = low + RAMP_TILE * math.tan(math.radians(_lerp(4.0, MAX_RAMP_ANGLE, difficulty)))
+    for i, direction in enumerate(("+x", "-x")):
+      tile.wedge(3.55 + (i + 0.5) * RAMP_TILE, tile.yc,
+                 RAMP_TILE / 2, lane_width / 2, direction, low, high)
+    beam_top = _lerp(0.03, MAX_BEAM, difficulty)
+    for x in (3.15, 6.85):
+      tile.beam((x, lo), (x, hi), beam_top)
+
+    # Flat start spots away from the constrictions and obstacles.
+    start_locations = ((0.4, 0.0),) if self.preview_start_only else ((0.4, 0.0), (3.15, offset))
+    spots = np.array([
+      [start_locations[k][0] + rng.uniform(-0.08, 0.08),
+       tile.yc + start_locations[k][1] + rng.uniform(-0.08, 0.08), 0.0]
+      for k in rng.integers(0, len(start_locations), size=8)
+    ])
+    return TerrainOutput(origin=np.array([0.4, tile.yc, 0.0]), geometries=tile.geoms,
+                         flat_patches={"spawn": spots})
+
+
+def maze_world_cfg(preview_start_only: bool = False) -> TerrainGeneratorCfg:
+  """Curriculum of winding corridors; ramps and beams, with no stairs."""
+  return _lanes({"maze": MazeTerrainCfg(preview_start_only=preview_start_only)}, 11)
 
 
 def rough_world_cfg() -> TerrainGeneratorCfg:

@@ -8,7 +8,8 @@ see [evaluation/README.md](evaluation/README.md).
 Two Colab notebooks serve different policy families:
 
 - [notebooks/train_colab.ipynb](notebooks/train_colab.ipynb) trains or continues
-  `G1-Flat-HeightMap`, `G1-Rough-HeightMap`, and `G1-Open-HeightMap`, with a
+  `G1-Flat-HeightMap`, `G1-Rough-HeightMap`, `G1-Open-HeightMap`, and
+  `G1-Open-Maze-HeightMap`, with a
   choice of bundled or Drive checkpoints and W&B logging.
 - [colab/train_g1.ipynb](colab/train_g1.ipynb) trains the new `Flat`, `Open`,
   `Competition`, and related tasks. Keep checkpoints within the same task family.
@@ -69,6 +70,69 @@ the robot.
 After fine-tuning, [the course route evaluator](evaluation/README.md) can
 load the new checkpoint with `--checkpoint` because it uses the same policy
 layout. The route evaluator's default checkpoint remains `model_5996.pt`.
+
+### Winding Open lanes with wall clearance
+
+`G1-Open-Maze-HeightMap` is a separate task for practicing narrow turns. Each
+8 m tile has a narrow opening with a collidable door leaf swung into the approach,
+then a deeper, offset opening between plain walls. The tile also has low sills,
+a short ramp, and step-over beams; there are no stairs or overhead bars.
+The door approach skirts its leaf; the plain-wall approach stays centered on
+the second opening instead of hugging the side wall.
+Rows 0–9 narrow both openings from about 1.4 m to 0.93 m and raise the ramp and beams.
+The training grid retains 10 rows × 11 columns and the distance-based terrain
+curriculum. An ordered series of position targets takes the robot around the open
+leaf, through the doorway, and through the wall passage. The command generator
+turns those targets into the same body-frame velocity command seen by the policy;
+it advances only when a target is reached. Robot spawn yaw remains random.
+It uses tighter target tolerances at the openings and caps the commanded forward
+speed at 0.25 m/s through the passages and 0.45 m/s on open sections. Speeds and
+route are fixed for the episode, even when the command manager resamples. Before
+moving toward a target, the follower checks the straight path for walls and the
+door leaf. If it is blocked, it looks for a later visible route point; if none
+is visible, it commands zero forward speed and yaw. It never steers backward to
+an earlier waypoint. The first step-over beam sits after
+the doorway.
+This task directs every robot along the route rather than sampling stand-still commands.
+The wall reward penalizes pelvis, hip, knee, elbow, or wrist points that come
+within 12 cm of a wall or door leaf after a 12 cm body allowance. The
+penalty is zero beyond that margin. It also retains Open's general foot-clearance,
+beam-clearance and arm-pose rewards.
+
+The policy layout is the same as `G1-Open-HeightMap` (791 actor inputs, 806 critic
+inputs, 29 actions), so its checkpoints can be loaded directly for inspection or
+fine-tuning. In either Colab notebook, select `G1-Open-Maze-HeightMap` as the task;
+its runs save under `logs/rsl_rl/g1_open_maze_heightmap/` in the chosen output
+directory. Fixed-level playback starts immediately before the first doorway.
+The maze has its own difficulty and geometry, so inspect it before
+training; the Open checkpoint has not yet learned these turns.
+
+On your Mac, from `training/`, inspect the narrowest level (9) with your current checkpoint:
+
+```bash
+python scripts/play.py G1-Open-Maze-HeightMap --terrain-level 9 \
+  --viewer viser --device cpu --num-envs 1 \
+  --checkpoint-file models/g1_open_heightmap/new_rwd/model_7994.pt
+```
+
+Open <http://localhost:8080>. **Reset Environment** repeats the lane, and
+**Terrain → New Lane Seed** changes the random spawn patch. To see the layout without a
+policy, use `--agent zero` in place of `--checkpoint-file ...`.
+Viser shows the full route in teal, numbered waypoints for the current tile,
+and the active target in yellow. A red target means the direct path is blocked;
+the **Maze route** panel reports the target and the actual velocity command.
+Manual twist sliders are disabled for this fixed-route task.
+
+To begin fine-tuning on a chosen curriculum row, set `START_TERRAIN_LEVEL` to
+`0`–`9` in either Colab notebook. `-1` keeps the usual random start on rows 0–1.
+This selects the row only when the training environment starts; the curriculum
+can still promote or demote robots on later episode resets. From a terminal,
+the equivalent option is:
+
+```bash
+python scripts/train.py G1-Open-Maze-HeightMap --start-terrain-level 6 \
+  --from models/<checkpoint>.pt
+```
 
 ## Quick start (copy, paste)
 

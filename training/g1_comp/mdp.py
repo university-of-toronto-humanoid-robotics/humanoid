@@ -12,6 +12,7 @@ from mjlab.utils.lab_api.math import quat_apply_inverse, yaw_quat
 from src.tasks.velocity.mdp.rewards import variable_posture
 
 from .actions import ARM_JOINTS, crouch_columns
+from . import worlds
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
@@ -105,6 +106,55 @@ def feet_clearance_over_beams(
       torch.where(over_beam, shortfall * speed[:, foot] + contact_cost * contact.data.found[:, foot].float(), 0.0)
     )
   return torch.stack(costs, dim=1).sum(dim=1)
+
+
+def maze_wall_proximity(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+  num_rows: int,
+  tile_length: float,
+  safe_margin: float = 0.12,
+  body_radius: float = 0.12,
+  fixed_level: int | None = None,
+) -> torch.Tensor:
+  """Penalty inside a finite clearance margin from the maze's side walls.
+
+  Sample the pelvis, hips, knees and elbows. The minimum lateral clearance is
+  measured to the straight walls, doorway jambs, and open door leaves in the current tile.
+  Beyond the margin the penalty is exactly zero, so extra distance is not paid.
+  """
+  terrain = env.scene.terrain
+  assert terrain is not None and terrain.env_origins is not None
+  robot = env.scene[asset_cfg.name]
+  points = robot.data.body_link_pos_w[:, asset_cfg.body_ids, :2]
+  x = points[..., 0]
+  y = points[..., 1] - terrain.env_origins[:, 1:2]
+  grid_x = (x + num_rows * tile_length / 2).clamp(0, num_rows * tile_length - 0.001)
+  row = torch.floor(grid_x / tile_length).long()
+  local_x = grid_x - row * tile_length
+  level = torch.full_like(row, fixed_level) if fixed_level is not None else row
+  d = (level.float() + 0.5) / 10
+  width = worlds.maze_lane_width(d)
+  opening = worlds.maze_gate_width(d)
+  offset = worlds.maze_gate_offset(d)
+  clearance = width / 2 - y.abs() - body_radius
+  for (x0, x1), center, side in zip(
+    worlds.MAZE_GATE_X, (offset, -offset), worlds.MAZE_LEAF_SIDES, strict=True
+  ):
+    near_gate = (local_x >= x0 - body_radius) & (local_x <= x1 + body_radius)
+    lower_clearance = y - (center - opening / 2) - body_radius
+    upper_clearance = (center + opening / 2) - y - body_radius
+    clearance = torch.minimum(
+      clearance, torch.where(near_gate, torch.minimum(lower_clearance, upper_clearance), torch.inf)
+    )
+    if side is not None:
+      (ax, ay), (bx, by) = worlds.maze_leaf_endpoints(x0, center, opening, side)
+      dx, dy = bx - ax, by - ay
+      along = (((local_x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)).clamp(0, 1)
+      leaf_distance = torch.sqrt((local_x - (ax + along * dx)).square() + (y - (ay + along * dy)).square())
+      clearance = torch.minimum(clearance, leaf_distance - body_radius - worlds.MAZE_LEAF_THICKNESS / 2)
+  closest = clearance.amin(dim=1)
+  return torch.square(torch.relu((safe_margin - closest) / safe_margin))
 
 
 # --- Crouch command and arm override -----------------------------------------
