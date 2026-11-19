@@ -455,11 +455,11 @@ def open_maze_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     resampling_time_range=twist.resampling_time_range,
     debug_vis=twist.debug_vis,
     heading_command=True,
-    heading_control_stiffness=1.5,
+    heading_control_stiffness=2.0,
     rel_standing_envs=0.0,
     rel_heading_envs=1.0,
     ranges=UniformVelocityCommandCfg.Ranges(
-      lin_vel_x=(0.0, 0.45), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1.5, 1.5), heading=(-math.pi, math.pi)
+      lin_vel_x=(0.0, 0.60), lin_vel_y=(-0.3, 0.3), ang_vel_z=(-1.0, 1.0), heading=(-math.pi, math.pi)
     ),
     viz=twist.viz,
     lane_prob=1.0,

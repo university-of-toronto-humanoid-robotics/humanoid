@@ -155,8 +155,9 @@ if "G1_PLAY_TERRAIN_LEVEL" in os.environ:
       target = term.active_target_w[env_idx].detach().cpu().numpy()
       robot = term.robot.data.root_link_pos_w[env_idx, :2].detach().cpu().numpy()
       visible = bool(term.target_visible[env_idx].item())
+      aligning = bool(term.target_is_alignment[env_idx].item())
       self._maze_target.position = (float(target[0]), float(target[1]), 0.42)
-      color = (255, 225, 55) if visible else (255, 70, 70)
+      color = (70, 160, 255) if aligning else ((255, 225, 55) if visible else (255, 70, 70))
       self._maze_target.color = color
       self._maze_aim.points = np.array([[[robot[0], robot[1], 0.42],
                                          [target[0], target[1], 0.42]]], dtype=np.float32)
@@ -167,7 +168,7 @@ if "G1_PLAY_TERRAIN_LEVEL" in os.environ:
         f"<b>Next waypoint:</b> {point} (tile {row})<br>"
         f"<b>Robot:</b> ({robot[0]:.2f}, {robot[1]:.2f}) m<br>"
         f"<b>Target:</b> ({target[0]:.2f}, {target[1]:.2f}) m<br>"
-        f"<b>Path:</b> {'clear' if visible else 'blocked — forward speed zero'}<br>"
+        f"<b>Path:</b> {'lateral alignment' if aligning else ('clear' if visible else 'blocked — speed zero')}<br>"
         f"<b>Command:</b> {command[0]:.2f} m/s forward, {command[2]:.2f} rad/s yaw"
       )
 

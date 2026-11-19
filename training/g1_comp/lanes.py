@@ -78,9 +78,13 @@ class MazeVelocityCommandCfg(LaneVelocityCommandCfg):
   fixed_level: int | None = None
   waypoint_radius: float = 0.18
   passage_radius: float = 0.08
-  cruise_speed: float = 0.45
-  passage_speed: float = 0.25
+  cruise_speed_range: tuple[float, float] = (0.40, 0.45)
+  passage_speed_range: tuple[float, float] = (0.20, 0.25)
   clearance_radius: float = 0.25
+  open_lookahead: float = 0.50
+  passage_lookahead: float = 0.30
+  speed_kp: float = 0.8
+  speed_filter_seconds: float = 0.30
 
   def build(self, env: ManagerBasedRlEnv) -> MazeVelocityCommand:
     return MazeVelocityCommand(self, env)
@@ -123,9 +127,22 @@ class MazeVelocityCommand(LaneVelocityCommand):
     self.active_target_w = torch.zeros(self.num_envs, 2, device=self.device)
     self.active_target_index = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
     self.target_visible = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+    self.target_is_alignment = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+    self.cruise_speed = torch.zeros(self.num_envs, device=self.device)
+    self.passage_speed = torch.zeros(self.num_envs, device=self.device)
+    self.filtered_vx = torch.zeros(self.num_envs, device=self.device)
+    self.speed_filter_valid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
   def reset(self, env_ids):
     self.route_pending[env_ids] = True
+    self.cruise_speed[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(
+      *self.cfg.cruise_speed_range
+    )
+    self.passage_speed[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(
+      *self.cfg.passage_speed_range
+    )
+    self.filtered_vx[env_ids] = 0.0
+    self.speed_filter_valid[env_ids] = False
     return super().reset(env_ids)
 
   def _target_position(self, route_index: torch.Tensor | None = None) -> torch.Tensor:
@@ -141,15 +158,15 @@ class MazeVelocityCommand(LaneVelocityCommand):
     return torch.stack((x, y), dim=1)
 
   def _resample_command(self, env_ids: torch.Tensor) -> None:
-    # The route and speed profile stay fixed throughout an episode. The
-    # CommandManager may call this every few seconds, but nothing is sampled.
+    # The route and speeds sampled at reset stay fixed throughout an episode.
+    # CommandManager resampling must not change them mid-route.
     self.lane_direction[env_ids] = 0.0
     self.is_heading_env[env_ids] = True
     self.is_standing_env[env_ids] = False
     self.vel_command_b[env_ids] = 0.0
 
   def _segment_clear(self, start: torch.Tensor, end: torch.Tensor) -> torch.Tensor:
-    """Check a straight centre path with body clearance against lane walls and passages."""
+    """Check wall clearance, allowing a robot already too close to move away."""
     assert self.terrain is not None and self.terrain.env_origins is not None
     samples = start[:, None, :] + self.clearance_samples * (end - start)[:, None, :]
     grid_x = (samples[..., 0] + self.cfg.num_rows * self.cfg.tile_length / 2).clamp(
@@ -162,22 +179,27 @@ class MazeVelocityCommand(LaneVelocityCommand):
     d = (level.float() + 0.5) / 10
     opening = worlds.maze_gate_width(d)
     offset = worlds.maze_gate_offset(d)
-    safe = y.abs() <= worlds.maze_lane_width(d) / 2 - self.cfg.clearance_radius
+    clearance = worlds.maze_lane_width(d) / 2 - y.abs()
     for (x0, x1), center, side in zip(
       worlds.MAZE_GATE_X, (offset, -offset), worlds.MAZE_LEAF_SIDES, strict=True
     ):
       at_gate = (x >= x0 - self.cfg.clearance_radius) & (x <= x1 + self.cfg.clearance_radius)
-      within_opening = (y >= center - opening / 2 + self.cfg.clearance_radius) & (
-        y <= center + opening / 2 - self.cfg.clearance_radius
-      )
-      safe &= ~at_gate | within_opening
+      gate_clearance = torch.minimum(y - (center - opening / 2), center + opening / 2 - y)
+      clearance = torch.minimum(clearance, torch.where(at_gate, gate_clearance, torch.inf))
       if side is not None:
         (ax, ay), (bx, by) = worlds.maze_leaf_endpoints(x0, center, opening, side)
         dx, dy = bx - ax, by - ay
         along = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)).clamp(0, 1)
         leaf_distance = torch.sqrt((x - (ax + along * dx)).square() + (y - (ay + along * dy)).square())
-        safe &= leaf_distance >= self.cfg.clearance_radius + worlds.MAZE_LEAF_THICKNESS / 2
-    return safe.all(dim=1)
+        clearance = torch.minimum(clearance, leaf_distance - worlds.MAZE_LEAF_THICKNESS / 2)
+    sufficient = (clearance >= self.cfg.clearance_radius).all(dim=1)
+    start_clearance = clearance[:, 0]
+    escaping = (
+      (start_clearance < self.cfg.clearance_radius)
+      & (clearance[:, 1:] >= start_clearance[:, None] - 0.005).all(dim=1)
+      & (clearance[:, -1] > start_clearance + 0.02)
+    )
+    return sufficient | escaping
 
   def _visible_target(self, pos: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Choose a visible forward route point, never one behind the robot."""
@@ -194,6 +216,26 @@ class MazeVelocityCommand(LaneVelocityCommand):
       active_index = torch.where(use, future_index, active_index)
       visible |= clear
     return target, visible, active_index
+
+  def _lookahead_target(self, pos: torch.Tensor, near_passage: torch.Tensor) -> torch.Tensor:
+    """Project onto the current route segment, then look ahead to its endpoint.
+
+    The next waypoint is a hard limit: looking through a door before reaching
+    its approach point could steer straight through the open leaf.
+    """
+    end = self._target_position()
+    start = self._target_position((self.route_index - 1).clamp(min=0))
+    segment = end - start
+    length = torch.linalg.vector_norm(segment, dim=1).clamp(min=1e-6)
+    along = ((pos - start) * segment).sum(dim=1) / length
+    along = along.clamp(min=0.0)
+    lookahead = torch.where(
+      near_passage,
+      torch.full_like(length, self.cfg.passage_lookahead),
+      torch.full_like(length, self.cfg.open_lookahead),
+    )
+    fraction = ((along + lookahead) / length).clamp(max=1.0)
+    return start + fraction[:, None] * segment
 
   def _update_command(self) -> None:
     assert self.terrain is not None and self.terrain.env_origins is not None
@@ -218,25 +260,50 @@ class MazeVelocityCommand(LaneVelocityCommand):
       reached = torch.linalg.vector_norm(target - pos, dim=1) < radius
       passed = pos[:, 0] > target[:, 0] + 0.05
       self.route_index += ((reached | passed) & (self.route_index < last)).long()
-    # A drifted robot may have passed its waypoint laterally. Keep the target
-    # ahead and stop rather than steering back into a wall.
-    target, visible, active_index = self._visible_target(pos)
+    point = self.route_index % len(MAZE_ROUTE_X)
+    near_passage = ((point >= 1) & (point <= 5)) | ((point >= 7) & (point <= 11))
+    lookahead = self._lookahead_target(pos, near_passage)
+    lookahead_clear = self._segment_clear(pos, lookahead)
+    # If the look-ahead point is blocked, try a visible route waypoint before
+    # aligning sideways. This keeps a drifted robot from targeting behind it.
+    fallback, fallback_clear, fallback_index = self._visible_target(pos)
+    target = torch.where(lookahead_clear[:, None], lookahead, fallback)
+    visible = lookahead_clear | fallback_clear
+    active_index = torch.where(lookahead_clear, self.route_index, fallback_index)
+    # A direct shortcut can graze the open leaf even while the waypoint itself
+    # is reachable. Move laterally on the near side first, then aim forward.
+    alignment = torch.stack((pos[:, 0] + 0.01, target[:, 1]), dim=1)
+    align_clear = self._segment_clear(pos, alignment)
+    aligning = ~visible & align_clear & ((target[:, 1] - pos[:, 1]).abs() > 0.05)
+    target = torch.where(aligning[:, None], alignment, target)
+    visible |= aligning
     self.active_target_w[:] = target
     self.active_target_index[:] = active_index
     self.target_visible[:] = visible
+    self.target_is_alignment[:] = aligning
     heading_to_target = torch.atan2(target[:, 1] - pos[:, 1], target[:, 0] - pos[:, 0])
     self.heading_target[:] = torch.where(visible, heading_to_target, self.robot.data.heading_w)
-    super()._update_command()
-    # Turn first if facing away from the safe route; stop forward if blocked.
-    point = self.route_index % len(MAZE_ROUTE_X)
-    near_passage = ((point >= 1) & (point <= 5)) | ((point >= 7) & (point <= 11))
-    speed = torch.where(
-      near_passage,
-      torch.full_like(self.heading_error, self.cfg.passage_speed),
-      torch.full_like(self.heading_error, self.cfg.cruise_speed),
+    self.heading_error[:] = wrap_to_pi(self.heading_target - self.robot.data.heading_w)
+    # Match the course follower's body-frame steering and filtered speed
+    # feedback. Keep the speeds bounded for the maze's narrow passages.
+    speed = torch.where(near_passage, self.passage_speed, self.cruise_speed)
+    facing = self.heading_error.abs() <= 0.65
+    moving = visible & facing
+    target_vx = torch.where(moving, speed * self.heading_error.cos().clamp(min=0), 0.0)
+    target_vy = torch.where(moving, (speed * self.heading_error.sin()).clamp(-0.3, 0.3), 0.0)
+    alpha = 1.0 - math.exp(-self._env.step_dt / self.cfg.speed_filter_seconds)
+    filtered = torch.where(
+      self.speed_filter_valid, self.filtered_vx + alpha *
+      (self.robot.data.root_link_lin_vel_b[:, 0] - self.filtered_vx), target_vx
     )
-    self.vel_command_b[:, 0] = speed * self.heading_error.cos().clamp(0, 1) * visible.float()
-    self.vel_command_b[:, 1] = 0.0
+    self.filtered_vx[:] = torch.where(moving, filtered, 0.0)
+    self.speed_filter_valid[:] = moving
+    max_vx = torch.where(near_passage, 0.30, 0.60)
+    self.vel_command_b[:, 0] = torch.where(
+      moving, (target_vx + self.cfg.speed_kp * (target_vx - filtered)).clamp(min=0).minimum(max_vx), 0.0
+    )
+    self.vel_command_b[:, 1] = target_vy
+    self.vel_command_b[:, 2] = torch.where(visible, (2.0 * self.heading_error).clamp(-1.0, 1.0), 0.0)
 
 
 def mark_start(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None) -> None:

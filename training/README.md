@@ -84,15 +84,20 @@ The training grid retains 10 rows × 11 columns and the distance-based terrain
 curriculum. An ordered series of position targets takes the robot around the open
 leaf, through the doorway, and through the wall passage. The command generator
 turns those targets into the same body-frame velocity command seen by the policy;
-it advances only when a target is reached. Robot spawn yaw remains random.
-It uses tighter target tolerances at the openings and caps the commanded forward
-speed at 0.25 m/s through the passages and 0.45 m/s on open sections. Speeds and
-route are fixed for the episode, even when the command manager resamples. Before
-moving toward a target, the follower checks the straight path for walls and the
-door leaf. If it is blocked, it looks for a later visible route point; if none
-is visible, it commands zero forward speed and yaw. It never steers backward to
-an earlier waypoint. The first step-over beam sits after
-the doorway.
+it advances when a target is reached or passed. Robot spawn yaw remains random.
+It uses tighter target tolerances at the openings. Each episode samples a passage
+speed from 0.20–0.25 m/s and an open-section speed from 0.40–0.45 m/s. The sampled
+speeds and route stay fixed for the episode, even when the command manager
+resamples. Like the competition evaluation follower, the maze controller
+projects the robot onto its route, aims at a point 0.30 m ahead near passages
+or 0.50 m ahead elsewhere, and produces forward, sideways, and yaw commands.
+It filters measured forward speed over 0.30 s and applies proportional feedback
+with gain 0.8; the resulting forward command is capped at 0.30 m/s near passages
+and 0.60 m/s elsewhere. It turns in place when the heading error exceeds 0.65 rad.
+The look-ahead target stops at each waypoint so it cannot skip the door approach.
+The wall and door-leaf clearance check can substitute a visible waypoint or a
+short lateral alignment move; if none is clear, it commands zero. The first
+step-over beam sits after the doorway.
 This task directs every robot along the route rather than sampling stand-still commands.
 The wall reward penalizes pelvis, hip, knee, elbow, or wrist points that come
 within 12 cm of a wall or door leaf after a 12 cm body allowance. The
@@ -119,8 +124,11 @@ Open <http://localhost:8080>. **Reset Environment** repeats the lane, and
 **Terrain → New Lane Seed** changes the random spawn patch. To see the layout without a
 policy, use `--agent zero` in place of `--checkpoint-file ...`.
 Viser shows the full route in teal, numbered waypoints for the current tile,
-and the active target in yellow. A red target means the direct path is blocked;
-the **Maze route** panel reports the target and the actual velocity command.
+and the active target in yellow. A blue target is a short lateral alignment move
+around the open door leaf. A red target means the path is blocked and the command
+is zero. If the robot is already inside the route checker's clearance margin,
+it may still move along a path that increases clearance. The **Maze route** panel
+reports the target and the actual velocity command.
 Manual twist sliders are disabled for this fixed-route task.
 
 To begin fine-tuning on a chosen curriculum row, set `START_TERRAIN_LEVEL` to
