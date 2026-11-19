@@ -17,6 +17,7 @@ setup(
     entry_points={
         'console_scripts': [
             'keyboard_teleop = teleop.keyboard_teleop:main',
+            'gamepad_teleop = teleop.gamepad_teleop:main',
         ],
     },
 )

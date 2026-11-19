@@ -126,6 +126,85 @@ operator side stays the same.
 | `space` | stop |
 | `Ctrl+C` | stop the robot and quit |
 
+## [NEW] PS4 controller
+
+`gamepad_teleop` drives the robot with a PS4 (DualShock 4) controller, laid out
+like Unitree's own G1 remote: left stick walks, right stick turns. Use it
+instead of `keyboard_teleop` (never both: the status line warns if two programs
+send commands).
+
+```bash
+ros2 run joy game_controller_node    # reads the controller
+ros2 run teleop gamepad_teleop       # drives the robot (its own terminal)
+```
+
+On Windows with WSL, the controller first has to be passed into WSL and then
+into a container: see [Controller on Windows (WSL)](#new-controller-on-windows-wsl).
+On native Ubuntu, plug it in (USB) or pair it (Bluetooth) and run the two
+commands above.
+
+| Control | Does | Unitree remote |
+|---|---|---|
+| left stick up / down | forward / back, up to 1.0 / 0.5 m/s | left stick |
+| left stick left / right | step left / right, up to 0.5 m/s | left stick |
+| right stick left / right | turn, up to 1.0 rad/s | right stick |
+| OPTIONS | unlock: start driving | START |
+| CIRCLE | stop and lock | L2 + B |
+| `Ctrl+C` (in its terminal) | stop the robot and quit | |
+
+- **Starts locked:** the robot stands still until OPTIONS is pressed, and
+  OPTIONS only works with both sticks let go, so unlocking never starts a move
+  by itself. The status line ends with `LOCKED`, `DRIVING` or `NO CONTROLLER`.
+- **Proportional:** speed follows how far the stick is pushed. Letting go stops
+  the robot. A small dead zone ignores a stick resting slightly off centre.
+- **Controller lost:** if no controller message arrives for 0.5 s (unplugged, out
+  of range, driver closed), the robot stops, and stays locked when the
+  controller comes back until OPTIONS is pressed again.
+- **Other controllers:** `game_controller_node` gives every controller it
+  recognises the same layout (an Xbox controller works too: Menu to start, B to
+  stop). Use it rather than `joy_node`, whose numbers change with the driver: on
+  WSL, `joy_node` puts the right stick on axis 2 and the triggers, resting at +1,
+  on axes 3 and 4. To change the numbers anyway:
+  `ros2 run teleop gamepad_teleop --ros-args -p axis_turn:=2`
+  (`axis_forward`, `axis_sideways`, `axis_turn`, `button_start`, `button_stop`).
+
+### [NEW] Controller on Windows (WSL)
+
+Tested with a wired DualShock 4. Bluetooth doesn't reach WSL, so use a USB cable.
+
+**1. Pass the controller into WSL.** In PowerShell **as Administrator**, with
+[usbipd-win](https://github.com/dorssel/usbipd-win) installed:
+
+```powershell
+usbipd list                          # find the controller's BUSID ("Wireless Controller", 054c:09cc)
+usbipd bind --busid <BUSID>          # once per controller (add --force if it warns about a filter)
+usbipd attach --wsl --busid <BUSID>  # again after every replug or WSL restart
+```
+
+While attached, Windows doesn't see the controller. `usbipd detach --busid <BUSID>`
+gives it back.
+
+**2. Load the joystick drivers in WSL** (after every WSL restart):
+
+```bash
+sudo modprobe usbhid joydev evdev
+ls /dev/input/                       # js0 and event0 should be there
+```
+
+**3. Start the driver in its own container**, on the same network as the dev
+container, from your `humanoid` folder (the dev container must be up):
+
+```bash
+docker run -d --rm --name joy --network humanoid_default \
+  --device /dev/input/js0 --device /dev/input/event0 \
+  humanoid-dev bash -c 'source /opt/ros/jazzy/setup.bash && ros2 run joy game_controller_node'
+docker logs joy                      # "Opened game controller: PS4 Controller"
+```
+
+**4. Drive:** in a shell in the dev container, `ros2 run teleop gamepad_teleop`
+(after `source install/setup.bash`, as in terminal 2). Stop the driver
+afterwards with `docker stop joy`.
+
 ## Status line
 
 ```
@@ -157,5 +236,7 @@ MODE TELEOP | cmd x +0.4 y +0.0 turn +0.0 | actual x +0.37 y -0.02 turn -0.07 | 
 |---|---|
 | `teleop/keyboard_teleop.py` | the operator program: keys, `/cmd_vel`, status line |
 | `launch/operator.launch.py` | the camera window |
+| **[NEW]** `teleop/gamepad_teleop.py` | the PS4 controller program: sticks and buttons to `/cmd_vel`, same status line |
 | `test/test_keyboard_teleop.py` | unit tests: `python3 -m pytest test` |
+| **[NEW]** `test/test_gamepad_teleop.py` | unit tests for the controller logic |
 | `training/g1_comp/camera.py` (outside this package) | the simulator's ROS bridge: `/cmd_vel` in; camera, velocity and tilt out |
