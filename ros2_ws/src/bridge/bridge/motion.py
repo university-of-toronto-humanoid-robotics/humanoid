@@ -62,7 +62,24 @@ class VelocityScript:
         return f'{int(np.searchsorted(self.ends, self.t, side="right"))} of {len(self.segments)} segments'
 
 
-MOTION_TYPES = {'waypoints': Waypoints, 'velocity': VelocityScript}
+class Operator:
+    """No script: a person drives over /cmd_vel (ros2_ws/src/teleop), so the sim publishes none of its own."""
+
+    publishes = False
+
+    def command(self, t, pos, yaw):
+        return np.zeros(3)
+
+    @property
+    def done(self):
+        return False
+
+    @property
+    def progress(self):
+        return 'operator driving'
+
+
+MOTION_TYPES = {'waypoints': Waypoints, 'velocity': VelocityScript, 'operator': Operator}
 
 
 def make_motion(config, speed=None):

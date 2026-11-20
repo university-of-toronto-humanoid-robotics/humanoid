@@ -26,6 +26,12 @@ The real G1 gives us three things and takes one:
 
 - **`walk_controller`** (`policy/`) runs the trained policy 50 times a second. It does nothing until `/walk_controller/start` is called; then it eases the joints to the standing pose, and hands over to the policy (a height-map policy first waits for `/height_scan`). `/walk_controller/stop`, a fall, or losing `/lowstate` makes it go limp. `/walk_controller/state` says which of `wait`, `stand`, `walk`, `damp` it is in.
 - **The sim also plays the gantry and the operator,** since the real robot needs both. The robot starts hanging from a gantry (the policy's gains can't balance it standing still). The sim calls `start` once FAST-LIO is running, lets go of the gantry when the controller reports `walk`, waits `hold` seconds, then publishes the scenario's motion script on `/cmd_vel`.
+- **[NEW] The head camera** (the D435i's color camera, `bridge/head_camera.py`) is hardware too: the sim renders it at
+  the URDF's `d435_link` and publishes what Intel's `realsense2_camera` driver would, as
+  `/g1/head_camera/color/{image_raw,camera_info}`, with the frames `head_camera_link` and
+  `head_camera_color_optical_frame`. `g1.launch.py` adds the compressed stream (`image_raw/compressed`) that the
+  driver adds on the robot. It renders with `MUJOCO_GL` (`egl` in the Linux container); without a GPU or display,
+  the sim runs on without it.
 - **For testing only,** the sim also publishes `/clock`, `/ground_truth/odom` and `/ground_truth/height_scan`, and ends with a report: FAST-LIO's error against the true pose, and `/height_scan`'s against the true terrain.
 
 There is a second, simpler sim for perception alone:
@@ -90,12 +96,21 @@ motion:
 | `course_ramps_heightmap` | The competition course | A height-map policy crossing the ramps from the deck side, round a rectangle and back |
 | `room_stairs_heightmap` | The LiDAR room | A height-map policy up the room's 20 cm steps to the third, then back down |
 | `ci_walk` | The LiDAR room | 2 m straight ahead on flat ground. CI runs it on every pull request, with no GPU (`tools/ci_sim_test.sh`) |
+| **[NEW]** `room_teleop` | The LiDAR room | No script: a person drives it with `teleop` (see `teleop/README.md`). Up to an hour, and a fall doesn't end it |
+| **[NEW]** `course_teleop` | The competition course | The same, from the start area facing the door, with the flat walker |
+| **[NEW]** `course_teleop_heightmap` | The competition course | The same, from the open deck facing the ramps, with the team's rough height-map walker (true-terrain scan) |
 
 To make a new test, copy a scenario and change it:
 - **Scene:** a new scene must include `description/g1/g1_29dof_mjlab.xml` (see `sim/g1_course_scene.xml`), and its own geoms must stay in geom group 0. The spawn height and the fall check only look at that group.
 - **Motion types:**
   - `waypoints` (`points`, `speed`, `laps`): turns toward each point in turn and walks when roughly facing it.
   - `velocity`: open-loop `segments`, each `{duration, vx, vy, wz}`.
+  - **[NEW]** `operator`: no script. The sim doesn't publish or even advertise `/cmd_vel`, so `teleop` is its only source.
+- **[NEW] After a fall** (`on_fall`, testing only): `end` (the default) stops the run, as before. `respawn` keeps it
+  running and adds a `/sim/respawn` service: the gantry takes hold of the robot where it lies, lifts it upright over
+  3 s (slowly, so FAST-LIO keeps track), and the controller starts again as at the beginning. It also gives
+  `walk_controller` a `~/reset` service (`allow_reset`), which `g1.launch.py` turns on only for such a sim scenario,
+  never on the robot. `teleop` calls it with SHARE on the controller or `r` on the keyboard.
 - **Policy types,** both read from an rsl_rl checkpoint:
   - `rsl_rl_g1_flat`: mjlab's `Unitree-G1-Flat` actor, 98 observations, blind.
   - `rsl_rl_g1_heightmap`: the team's `G1-Flat-HeightMap` and `G1-Rough-HeightMap` actors, 791 observations: the same 98 plus a 693-point terrain scan. The scenario's `policy.scan` (or `scan:=`) picks its source: `true_terrain` ray-casts the scene as training does (`bridge/height_scan.py`), and `elevation_map` is `/height_scan` from `height_scan_node`, which samples the live elevation map at the pelvis pose from TF, exactly as on the robot. The `G1-Comp-*` tasks (793 observations) are a different family and aren't supported yet.
@@ -112,6 +127,7 @@ To make a new test, copy a scenario and change it:
 | `scenario` | `room_walk` | walk | Scenario name or path |
 | `scene`, `duration`, `speed` | from the scenario | walk | Override the scenario's scene, run length and waypoint speed |
 | `viewer` | `true` | both | Open the MuJoCo viewer |
+| **[NEW]** `camera` | `true` | walk | Render and publish the head camera |
 | `duration` | 60 s | scripted | Run length |
 | `hold` | 3 s | both | Walk: the wait between the controller starting to walk and the motion script. Scripted: standing still at the start, for FAST-LIO and `gravity_align` |
 | `rays_per_slice` | 2000 | both | Rays per 10 ms slice; 2000 gives the Mid-360's 200,000 points/s |

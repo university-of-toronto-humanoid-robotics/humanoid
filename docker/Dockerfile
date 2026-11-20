@@ -53,3 +53,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cuda_nvrtc/li
 RUN apt-get update && apt-get install -y ros-jazzy-rmw-cyclonedds-cpp && rm -rf /var/lib/apt/lists/*
 
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc
+
+# The operator's camera over Wi-Fi: image_transport's compressed (JPEG) stream, for the sim's head camera and the
+# robot's RealSense driver alike, and for rqt_image_view to show it.
+RUN apt-get update && apt-get install -y ros-jazzy-image-transport-plugins && rm -rf /var/lib/apt/lists/*
