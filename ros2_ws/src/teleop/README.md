@@ -254,7 +254,7 @@ frames are the ones Intel's driver publishes on the robot
 | `/g1/head_camera/color/camera_info` | the pinhole model, for drawing things into the image |
 
 Frames: `d435_link → head_camera_link → head_camera_color_optical_frame`. To see
-the raw stream instead: `ros2 launch teleop operator.launch.py image:=/g1/head_camera/color/image_raw`.
+the raw stream instead: `ros2 launch teleop operator.launch.py transport:=raw`.
 
 ## [NEW] After a fall: reset
 
