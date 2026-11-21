@@ -1,0 +1,13 @@
+# The LiDAR room, driven by a person instead of a script (ros2_ws/src/teleop).
+# Run: ros2 launch bringup g1.launch.py scenario:=room_teleop
+# then, in another terminal: ros2 run teleop keyboard_teleop   (or gamepad_teleop)
+scene: sim/g1_walk_scene.xml
+spawn: {x: 0.0, y: 0.0, yaw: 0.0}     # pelvis position (m) and heading (rad); its height comes from the ground
+duration: 3600.0                       # s of sim time, at most
+policy:
+  type: rsl_rl_g1_flat                 # see policy/policy/walk_policy.py
+  checkpoint: training/models/g1_walk/model_12400.pt
+motion:
+  type: operator                       # the sim publishes no /cmd_vel: see bridge/motion.py
+on_fall: respawn                       # testing only: keep running after a fall, and stand the robot up where it
+                                       # is on /sim/respawn (teleop: SHARE or r). Other scenarios end on a fall.

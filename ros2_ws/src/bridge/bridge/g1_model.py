@@ -8,6 +8,7 @@ import re
 import mujoco
 import numpy as np
 
+from bridge import head_camera
 from policy import g1
 
 PHYSICS_DT = 0.005          # s, as in training (and the Mid-360's 200 Hz IMU)
@@ -81,6 +82,8 @@ def build_model(scene, description):
     gantry = spec.add_equality(name=GANTRY, type=mujoco.mjtEq.mjEQ_WELD, objtype=mujoco.mjtObj.mjOBJ_BODY,
                                name1='world', name2='pelvis')
     gantry.active = False
+
+    head_camera.add_to_spec(spec)   # the operator's view; rendering only, no effect on the physics
 
     model = spec.compile()
     hinges = np.nonzero(model.jnt_type == mujoco.mjtJoint.mjJNT_HINGE)[0]

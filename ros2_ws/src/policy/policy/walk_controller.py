@@ -15,6 +15,9 @@ It moves through these states:
          a scan.
   damp   motors only resist motion, so the robot sinks down. Entered on a fault (the robot tipped over, or
          /lowstate stopped) or a call to ~/stop. It stays here until the node is restarted.
+
+Sim testing only: with allow_reset (off by default, and only ever set by bringup for a sim scenario with
+on_fall: respawn), ~/reset puts it back in wait from any state, so the sim can stand a fallen robot up again.
 """
 import numpy as np
 import rclpy
@@ -45,6 +48,7 @@ class WalkController(Node):
         checkpoint = self.declare_parameter('checkpoint', '').value
         scan_topic = self.declare_parameter('scan_topic', '/height_scan').value
         self.stand_time = self.declare_parameter('stand_time', 2.0).value
+        allow_reset = self.declare_parameter('allow_reset', False).value   # sim testing only: see the docstring
         self.started = False
 
         self.policy = make_policy(kind, checkpoint)
@@ -67,6 +71,8 @@ class WalkController(Node):
         self.state_pub = self.create_publisher(String, '~/state', latched)
         self.create_service(Trigger, '~/start', self.on_start)
         self.create_service(Trigger, '~/stop', self.on_stop)
+        if allow_reset:
+            self.create_service(Trigger, '~/reset', self.on_reset)
         self.create_timer(self.policy.dt, self.step)
         self.state_pub.publish(String(data=self.state))
         self.get_logger().info(f'{kind} from {checkpoint}. Waiting for a call to ~/start.')
@@ -105,13 +111,25 @@ class WalkController(Node):
         response.success = True
         return response
 
+    def on_reset(self, request, response):
+        self.started = False
+        self.command, self.command_time = np.zeros(3), None
+        self.stand_from = self.stand_start = None
+        self.set_state('wait', 'reset requested: sim testing only')
+        response.success = True
+        return response
+
     def set_state(self, state, why=''):
         if state == self.state:
             return
         self.state = state
         self.state_pub.publish(String(data=state))
-        log = self.get_logger().error if state == 'damp' else self.get_logger().info
-        log(f'State: {state}' + (f' ({why})' if why else ''))
+        text = f'State: {state}' + (f' ({why})' if why else '')
+        # One call per severity: rclpy refuses to log from the same line at a new severity (after a reset).
+        if state == 'damp':
+            self.get_logger().error(text)
+        else:
+            self.get_logger().info(text)
 
     def step(self):
         if self.low is None or (self.state == 'wait' and not self.started):
