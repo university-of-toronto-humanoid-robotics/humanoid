@@ -15,7 +15,8 @@ motion script's /cmd_vel, steering by the true pose. The robot is built the way 
 were trained on (bridge/g1_model.py).
 
 For testing only, it also publishes /clock, /ground_truth/odom and /ground_truth/height_scan (the true terrain
-scan), and at the end reports FAST-LIO's error and how far /height_scan was from the true scan.
+scan), and at the end reports FAST-LIO's error, how far /height_scan was from the true scan, and how far the
+localizer's /localizer/pose was from the true pelvis pose.
 """
 from pathlib import Path
 import threading
@@ -39,6 +40,7 @@ from unitree_hg.msg import LowCmd, LowState
 
 from bridge import g1_model
 from bridge.height_scan import ScanMonitor, TrueTerrainScan
+from bridge.localization_monitor import LocalizationMonitor
 from bridge.motion import make_motion
 from bridge.mujoco_mid360_sim import FRAME_SLICES, IMU_DT, SLICE_TICKS, STAMP_OFFSET, Mid360Sim, to_stamp
 from bridge.scenario import in_repo, load_scenario
@@ -129,9 +131,14 @@ class G1WalkSim(Node):
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(String, '/walk_controller/state', self.on_controller_state, latched)
         self.start_client = self.create_client(Trigger, '/walk_controller/start')
+        if getattr(self.motion, 'external', False):
+            self.navigator_client = self.create_client(Trigger, '/navigator/start')
+            self.navigator_started, self.navigator_retry = False, 0.0
+            self.create_subscription(String, '/navigator/state', self.on_navigator_state, latched)
         self.start_sent = False
         self.true_scan = TrueTerrainScan(self.model, self.data)
         self.monitor = ScanMonitor(self)
+        self.localization = LocalizationMonitor(self)
         self.controller_state = None
         self.motion_start = None    # sim time at which the operator starts the motion script
 
@@ -189,6 +196,27 @@ class G1WalkSim(Node):
         ground = g1_model.ground_below(self.model, self.data, pos[0], pos[1], top=pos[2])
         return np.inf if ground is None else pos[2] - ground
 
+    def on_navigator_start(self, future):
+        response = future.result()
+        if response.success:
+            self.navigator_started = True
+            self.get_logger().info('The navigator is driving.')
+        else:
+            self.get_logger().warn(f'The navigator would not start yet: {response.message}', throttle_duration_sec=5.0)
+
+    def on_navigator_state(self, msg):
+        self.motion.state = msg.data
+
+    def report_route_end(self):
+        """How far the true pelvis ended from the route's last stop."""
+        from navigation.route import load_route
+        stop = load_route(in_repo(f'ros2_ws/src/navigation/routes/{self.motion.route}.yaml')).waypoints[-1]
+        pos, yaw = self.pelvis_pose()
+        message = f'Route end vs the true pelvis: {np.hypot(*(pos[:2] - stop.xy)) * 100:.1f} cm off'
+        if stop.yaw is not None:
+            message += f', heading {np.degrees(abs((yaw - stop.yaw + np.pi) % (2 * np.pi) - np.pi)):.1f} deg off'
+        self.get_logger().info(message + f' (tolerance {stop.tolerance * 100:.0f} cm)')
+
     @property
     def moving(self):
         """Whether the motion script has a start time: the controller is walking."""
@@ -206,13 +234,22 @@ class G1WalkSim(Node):
             self.motion_start = t + self.hold
             self.get_logger().info(f'The controller is walking at t = {t:.1f} s: gantry released. Motion starts in '
                                    f'{self.hold:.0f} s.')
-        command = np.zeros(3)
-        if self.moving and t >= self.motion_start:
-            command = self.motion.command(t - self.motion_start, *self.pelvis_pose())
-        msg = Twist()
-        msg.linear.x, msg.linear.y, msg.angular.z = map(float, command)
-        self.cmd_vel_pub.publish(msg)
+        if getattr(self.motion, 'external', False):
+            # The navigator drives: ask it to start (again each second until it accepts), and leave /cmd_vel alone.
+            if self.moving and t >= self.motion_start and not self.navigator_started and t >= self.navigator_retry:
+                self.navigator_retry = t + 1.0
+                if self.navigator_client.service_is_ready():
+                    self.navigator_client.call_async(Trigger.Request()).add_done_callback(self.on_navigator_start)
+        else:
+            command = np.zeros(3)
+            if self.moving and t >= self.motion_start:
+                command = self.motion.command(t - self.motion_start, *self.pelvis_pose())
+            msg = Twist()
+            msg.linear.x, msg.linear.y, msg.angular.z = map(float, command)
+            self.cmd_vel_pub.publish(msg)
 
+        pos, yaw = self.pelvis_pose()
+        self.localization.record(t, pos, yaw)
         truth = self.true_scan(self.data)
         self.true_scan_pub.publish(Float32MultiArray(data=truth.tolist()))
         self.monitor.record(truth)
@@ -302,6 +339,9 @@ class G1WalkSim(Node):
             self.get_logger().info(f'Completed {self.motion.progress}. Ran at {realtime:.2f}x real time.')
         self.report()
         self.get_logger().info(self.monitor.report())
+        self.get_logger().info(self.localization.report())
+        if getattr(self.motion, 'external', False) and self.motion.done:
+            self.report_route_end()
         if viewer is not None:
             viewer.close()
 

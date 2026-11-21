@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>localization</name>
+  <version>0.0.0</version>
+  <description>Finds the G1 on the competition course by matching the LiDAR scan to the course map (map -> odom).</description>
+  <maintainer email="rodean.moradi@gmail.com">Rodean Moradi</maintainer>
+  <license>BSD</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
