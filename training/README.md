@@ -7,12 +7,38 @@ see [evaluation/README.md](evaluation/README.md).
 
 Two Colab notebooks serve different policy families:
 
-- [notebooks/train_colab.ipynb](notebooks/train_colab.ipynb) trains or continues
-  `G1-Flat-HeightMap`, `G1-Rough-HeightMap`, `G1-Open-HeightMap`, and
-  `G1-Open-Maze-HeightMap`, with a
-  choice of bundled or Drive checkpoints and W&B logging.
+- [notebooks/train_colab.ipynb](notebooks/train_colab.ipynb) signs in to GitHub,
+  clones the selected branch, then lists its registered training tasks. It offers
+  compatible bundled or Drive checkpoints and W&B logging.
 - [colab/train_g1.ipynb](colab/train_g1.ipynb) trains the new `Flat`, `Open`,
   `Competition`, and related tasks. Keep checkpoints within the same task family.
+
+### RPL terrain experts (visualization stage)
+
+`RPL-Ascend-Stairs`, `RPL-Descend-Stairs`, `RPL-Ramps`, and `RPL-Obstacles`
+use the same 791 actor inputs, 806 critic inputs, 29 joint actions, and MLP
+as `G1-Flat-HeightMap`. Each is a one-way lane with a 10-row terrain curriculum;
+reaching the far side ends the episode and promotes the terrain level. Stairs
+start below or above the steps according to the task. Obstacles contain the
+course-style beams and door sill. Stairs and ramps keep
+`G1-Rough-HeightMap` rewards; obstacles keep `G1-Open-HeightMap` rewards,
+including its beam-clearance and arm-posture terms. The existing height-map
+scan noise is retained during training, matching `G1-Flat-HeightMap`.
+Training uses a grid of independent tiles, one feature per robot. Playback shows
+only one tile, so an ascending stair does not lead into a second tile's lower floor.
+
+From `training/` on your Mac, inspect any of them at level 0–9:
+
+```bash
+mjpython scripts/play.py RPL-Ascend-Stairs --terrain-level 9 \
+  --viewer native --device cpu --num-envs 1 --agent zero
+```
+
+Replace the task name with one of the other three. To watch an existing
+compatible policy walk through it, replace `--agent zero` with
+`--checkpoint-file models/best_g1_flat_heightmap/model_1999.pt`.
+The GitHub-source Colab notebook discovers these tasks after cloning a branch
+that contains them. The Drive-source notebook still has a fixed task list.
 
 ### Fine-tune the existing rough height-map checkpoint on Open terrain
 

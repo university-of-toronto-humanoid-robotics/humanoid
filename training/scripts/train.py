@@ -9,9 +9,9 @@ of its options. From training/ inside the container:
 --from FILE continues from a model_<N>.pt with the same policy observation and
 action layout (e.g. G1-Comp-Flat to G1-Comp-Rough, or Flat to Open). The file
 is copied into this task's log folder and Unitree's resume options are filled
-in for you. For those task families, the copy's observation normalizer adapts
-quickly to the new task (NORMALIZER_MEMORY). The older G1-*-HeightMap family
-keeps its original normalizer behavior.
+in for you. For the newer and RPL task families, the copy's observation
+normalizer adapts quickly to the new task (NORMALIZER_MEMORY). The older
+G1-*-HeightMap tasks keep their original normalizer behavior.
 
 Saves to training/logs/rsl_rl/<experiment>/<date>_<run name>/. One GPU only:
 with --gpu-ids for several GPUs, the worker processes would not see our tasks.
@@ -42,6 +42,7 @@ import _setup
 import src.tasks  # noqa: F401  (registers Unitree's tasks)
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg
 from g1_comp.tasks import TASKS
+from g1_comp.rpl import RPL_TASKS
 
 if start_terrain_level is not None and "start_terrain_level" not in load_env_cfg(sys.argv[1]).events:
   raise SystemExit("--start-terrain-level is supported for the Open height-map and lane tasks")
@@ -80,7 +81,7 @@ def use_from_option(argv: list[str]) -> list[str]:
   dest = Path("logs") / "rsl_rl" / experiment / run
   dest.mkdir(parents=True, exist_ok=True)
   shutil.copy2(source, dest / source.name)
-  if task in TASKS or task.startswith("G1-Comp-"):
+  if task in TASKS or task in RPL_TASKS or task.startswith("G1-Comp-"):
     shorten_normalizer_memory(dest / source.name)
   print(f"[INFO] Continuing from {source} (copied to {dest})")
   return args + ["--agent.resume", "True", "--agent.load-run", run, "--agent.load-checkpoint", source.name]

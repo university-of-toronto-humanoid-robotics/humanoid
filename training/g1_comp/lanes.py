@@ -70,6 +70,54 @@ class LaneVelocityCommand(UniformVelocityCommand):
 
 
 @dataclass(kw_only=True)
+class RplForwardCommandCfg(LaneVelocityCommandCfg):
+  """Sample walking speeds while keeping the target heading along positive lane x."""
+
+  def build(self, env: ManagerBasedRlEnv) -> RplForwardCommand:
+    return RplForwardCommand(self, env)
+
+
+class RplForwardCommand(LaneVelocityCommand):
+  def _random_direction(self, n: int) -> torch.Tensor:
+    return torch.zeros(n, device=self.device)
+
+
+def rpl_feature_progress(env: ManagerBasedRlEnv, env_ids: torch.Tensor, goal_distance: float = 5.6) -> torch.Tensor:
+  """Promote only after reaching the far side of the assigned feature."""
+  terrain = env.scene.terrain
+  assert terrain is not None
+  start = getattr(env, "_lane_start", None)
+  if start is not None:
+    pos = env.scene["robot"].data.root_link_pos_w[env_ids, :2]
+    forward = pos[:, 0] - start[env_ids, 0]
+    move_up = forward >= goal_distance
+    move_down = forward < goal_distance / 3
+    terrain.update_env_origins(env_ids, move_up, move_down & ~move_up)
+  return torch.mean(terrain.terrain_levels.float())
+
+
+def rpl_feature_complete(env: ManagerBasedRlEnv, goal_distance: float = 5.6) -> torch.Tensor:
+  """End an episode at the far-side landing, before it enters the next tile."""
+  start = getattr(env, "_lane_start", None)
+  if start is None:
+    return torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+  return env.scene["robot"].data.root_link_pos_w[:, 0] - start[:, 0] >= goal_distance
+
+
+def rpl_outside_tile(env: ManagerBasedRlEnv, half_width: float) -> torch.Tensor:
+  """Reset a robot before it walks backward into the neighbouring terrain tile."""
+  start = getattr(env, "_lane_start", None)
+  if start is None:
+    return torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+  terrain = env.scene.terrain
+  assert terrain is not None and terrain.env_origins is not None
+  pos = env.scene["robot"].data.root_link_pos_w[:, :2]
+  return (pos[:, 0] - start[:, 0] < -0.30) | (
+    (pos[:, 1] - terrain.env_origins[:, 1]).abs() > half_width
+  )
+
+
+@dataclass(kw_only=True)
 class MazeVelocityCommandCfg(LaneVelocityCommandCfg):
   """Visit ordered position targets through the door and wall passages."""
 

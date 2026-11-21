@@ -37,6 +37,7 @@ from .env_cfgs import (
 )
 from .tasks import (TASKS, open_heightmap_env_cfg, open_heightmap_ppo_runner_cfg,
                     open_maze_heightmap_env_cfg, open_maze_heightmap_ppo_runner_cfg, runner_cfg)
+from .rpl import RPL_TASKS, rpl_env_cfg, rpl_runner_cfg
 
 register_mjlab_task(
   task_id="G1-Flat-HeightMap",
@@ -118,5 +119,14 @@ for _task_id, _make in TASKS.items():
     env_cfg=_make(),
     play_env_cfg=_make(play=True),
     rl_cfg=runner_cfg(_task_id),
+    runner_cls=VelocityOnPolicyRunner,
+  )
+
+for _task_id, _feature in RPL_TASKS.items():
+  register_mjlab_task(
+    task_id=_task_id,
+    env_cfg=rpl_env_cfg(_feature),
+    play_env_cfg=rpl_env_cfg(_feature, play=True),
+    rl_cfg=rpl_runner_cfg(_task_id),
     runner_cls=VelocityOnPolicyRunner,
   )

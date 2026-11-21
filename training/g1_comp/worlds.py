@@ -385,6 +385,78 @@ def open_world_cfg(beam_group: int = 0) -> TerrainGeneratorCfg:
 
 
 @dataclass(kw_only=True)
+class RplLaneTerrainCfg(SubTerrainCfg):
+  """One forward traversal of a single competition feature per curriculum tile."""
+
+  feature: str
+  beam_group: int = 0
+  size: tuple[float, float] = TILE_SIZE
+
+  def __post_init__(self) -> None:
+    if self.feature not in {"ascend", "descend", "ramps", "obstacles"}:
+      raise ValueError(f"Unknown RPL terrain feature: {self.feature}")
+    self.flat_patch_sampling = {"spawn": FlatPatchSamplingCfg(num_patches=8, patch_radius=0.25)}
+
+  def function(self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator) -> TerrainOutput:
+    d = float(difficulty)
+    length, width = self.size
+    if self.feature in {"ascend", "descend"}:
+      lane_width = _lerp(1.5, STAIR_WIDTH, d)
+    else:
+      lane_width = _lerp(LANE_WIDTH, 1.2, d)
+    tile = _Tile(spec, width / 2, lane_width, beam_group=self.beam_group)
+    tile.geoms.append(
+      TerrainGeometry(geom=make_plane(tile.body, self.size, 0.0, center_zero=False)[0], color=_color("floor"))
+    )
+    start_height = 0.0
+    highest = 0.0
+    if self.feature in {"ascend", "descend"}:
+      n = 2 + round((STAIR_RISERS - 2) * d)
+      riser = _lerp(0.06, 0.225, d)  # row 9 always exceeds the course's 20.3 cm
+      tread = _lerp(EASY_TREAD, STAIR_TREAD, d)
+      highest = n * riser
+      x0 = 2.0
+      if self.feature == "ascend":
+        # Nested slabs form upward risers and a long landing before the goal.
+        for i in range(1, n + 1):
+          tile.box("stairs", x0 + (i - 1) * tread, length, *tile.across(), i * riser,
+                   shade=1.0 if i % 2 else 0.7)
+      else:
+        start_height = highest
+        tile.box("stairs", 0.0, x0, *tile.across(), highest)
+        for i in range(1, n):
+          tile.box("stairs", x0 + (i - 1) * tread, x0 + i * tread,
+                   *tile.across(), (n - i) * riser,
+                   shade=1.0 if i % 2 else 0.7)
+    elif self.feature == "ramps":
+      _plan_ramps(tile, rng, d).build(2.0)
+      highest = RAMP_BASE * d + RAMP_TILE * math.tan(math.radians(_lerp(4.0, MAX_RAMP_ANGLE, d)))
+    else:
+      _plan_beams(tile, rng, d).build(2.0)
+      _plan_sill(tile, rng, d).build(5.0)
+      highest = max(BEAM_PLATE + MAX_BEAM, MAX_SILL)
+
+    wall_height = max(LANE_WALL_HEIGHT, highest + 0.45)
+    tile.box("wall", 0.0, length, 0.0, tile.yc - lane_width / 2, wall_height)
+    tile.box("wall", 0.0, length, tile.yc + lane_width / 2, width, wall_height)
+    side = max(0.0, lane_width / 2 - 0.35)
+    spawns = np.array([
+      [rng.uniform(0.35, 0.55), tile.yc + rng.uniform(-side, side), start_height]
+      for _ in range(8)
+    ])
+    return TerrainOutput(
+      origin=np.array([0.45, tile.yc, start_height]),
+      geometries=tile.geoms,
+      flat_patches={"spawn": spawns},
+    )
+
+
+def rpl_world_cfg(feature: str, beam_group: int = 0) -> TerrainGeneratorCfg:
+  """Ten curriculum rows, from easy features to slightly beyond course dimensions."""
+  return _lanes({feature: RplLaneTerrainCfg(feature=feature, beam_group=beam_group)}, 7)
+
+
+@dataclass(kw_only=True)
 class MazeTerrainCfg(SubTerrainCfg):
   """One corridor tile with offset doorways, a ramp and step-over beams."""
 
