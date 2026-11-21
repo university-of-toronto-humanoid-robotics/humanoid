@@ -8,18 +8,30 @@ from typing import TYPE_CHECKING
 import torch
 
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.utils.lab_api.math import quat_apply_inverse, yaw_quat
 from src.tasks.velocity.mdp.rewards import variable_posture
 
 from .actions import ARM_JOINTS, crouch_columns
+from . import worlds
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
   from mjlab.managers.reward_manager import RewardTermCfg
-  from mjlab.sensor import RayCastSensor
+  from mjlab.sensor import ContactSensor, RayCastSensor
 
   from .commands import BaseHeightCommand
 
 _NO_GROUND = 1.0  # m; clearance reported when no ray under a foot hits anything
+
+
+def arm_pose_deviation(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+  """Squared shoulder and elbow displacement from the robot's default pose."""
+  robot = env.scene[asset_cfg.name]
+  joints = asset_cfg.joint_ids
+  return torch.sum(
+    torch.square(robot.data.joint_pos[:, joints] - robot.data.default_joint_pos[:, joints]),
+    dim=1,
+  )
 
 
 def foot_clearance(env: ManagerBasedRlEnv, sensor_names: tuple[str, ...]) -> torch.Tensor:
@@ -61,6 +73,88 @@ def feet_clearance_terrain(
       moving = torch.norm(command[:, :2], dim=1) + torch.abs(command[:, 2]) > command_threshold
       cost = cost * moving.float()
   return cost
+
+
+def feet_clearance_over_beams(
+  env: ManagerBasedRlEnv,
+  sensor_names: tuple[str, ...],
+  target_height: float,
+  contact_sensor_name: str,
+  contact_cost: float,
+  asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Penalize low moving feet and foot contact over step-over beams only.
+
+  Beam-only ray patches distinguish the beams from ramps, stairs, and floor.
+  The term is zero where no beam lies under the sole; the policy still receives
+  its usual terrain clearance reward everywhere else.
+  """
+  robot = env.scene[asset_cfg.name]
+  foot_z = robot.data.site_pos_w[:, asset_cfg.site_ids, 2]
+  speed = torch.norm(robot.data.site_lin_vel_w[:, asset_cfg.site_ids, :2], dim=-1)
+  contact: ContactSensor = env.scene[contact_sensor_name]
+  assert contact.data.found is not None
+  costs = []
+  for foot, name in enumerate(sensor_names):
+    rays: RayCastSensor = env.scene[name]
+    hit_z = torch.where(rays.data.distances >= 0, rays.data.hit_pos_w[..., 2], -torch.inf)
+    beam_z = hit_z.amax(dim=1)
+    over_beam = torch.isfinite(beam_z)
+    beam_z = torch.where(over_beam, beam_z, foot_z[:, foot])
+    shortfall = torch.relu(target_height - (foot_z[:, foot] - beam_z))
+    costs.append(
+      torch.where(over_beam, shortfall * speed[:, foot] + contact_cost * contact.data.found[:, foot].float(), 0.0)
+    )
+  return torch.stack(costs, dim=1).sum(dim=1)
+
+
+def maze_wall_proximity(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+  num_rows: int,
+  tile_length: float,
+  safe_margin: float = 0.12,
+  body_radius: float = 0.12,
+  fixed_level: int | None = None,
+) -> torch.Tensor:
+  """Penalty inside a finite clearance margin from the maze's side walls.
+
+  Sample the pelvis, hips, knees and elbows. The minimum lateral clearance is
+  measured to the straight walls, doorway jambs, and open door leaves in the current tile.
+  Beyond the margin the penalty is exactly zero, so extra distance is not paid.
+  """
+  terrain = env.scene.terrain
+  assert terrain is not None and terrain.env_origins is not None
+  robot = env.scene[asset_cfg.name]
+  points = robot.data.body_link_pos_w[:, asset_cfg.body_ids, :2]
+  x = points[..., 0]
+  y = points[..., 1] - terrain.env_origins[:, 1:2]
+  grid_x = (x + num_rows * tile_length / 2).clamp(0, num_rows * tile_length - 0.001)
+  row = torch.floor(grid_x / tile_length).long()
+  local_x = grid_x - row * tile_length
+  level = torch.full_like(row, fixed_level) if fixed_level is not None else row
+  d = (level.float() + 0.5) / 10
+  width = worlds.maze_lane_width(d)
+  opening = worlds.maze_gate_width(d)
+  offset = worlds.maze_gate_offset(d)
+  clearance = width / 2 - y.abs() - body_radius
+  for (x0, x1), center, side in zip(
+    worlds.MAZE_GATE_X, (offset, -offset), worlds.MAZE_LEAF_SIDES, strict=True
+  ):
+    near_gate = (local_x >= x0 - body_radius) & (local_x <= x1 + body_radius)
+    lower_clearance = y - (center - opening / 2) - body_radius
+    upper_clearance = (center + opening / 2) - y - body_radius
+    clearance = torch.minimum(
+      clearance, torch.where(near_gate, torch.minimum(lower_clearance, upper_clearance), torch.inf)
+    )
+    if side is not None:
+      (ax, ay), (bx, by) = worlds.maze_leaf_endpoints(x0, center, opening, side)
+      dx, dy = bx - ax, by - ay
+      along = (((local_x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)).clamp(0, 1)
+      leaf_distance = torch.sqrt((local_x - (ax + along * dx)).square() + (y - (ay + along * dy)).square())
+      clearance = torch.minimum(clearance, leaf_distance - body_radius - worlds.MAZE_LEAF_THICKNESS / 2)
+  closest = clearance.amin(dim=1)
+  return torch.square(torch.relu((safe_margin - closest) / safe_margin))
 
 
 # --- Crouch command and arm override -----------------------------------------
@@ -217,3 +311,129 @@ def skills_curriculum(
   env.command_manager.get_term(height_command_name).cfg.crouch_prob = progress * crouch_prob
   env.action_manager.get_term(action_name).cfg.override_prob = progress * arm_override_share
   return {"skills_progress": torch.tensor(progress)}
+
+
+class arm_idle:
+  """Sum of the policy's squared arm outputs while the arms are overridden. [B]
+
+  Overridden arm outputs do nothing, so nothing else in the reward holds them in
+  place: they drifted far from zero in training (run rough2), and the arms jumped
+  when the override ended. This pulls them back to the default pose.
+  """
+
+  def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+    term = env.action_manager.get_term(cfg.params.get("action_name", "joint_pos"))
+    self.arm_cols = term._arm_cols
+
+  def __call__(self, env: ManagerBasedRlEnv, action_name: str = "joint_pos") -> torch.Tensor:
+    term = env.action_manager.get_term(action_name)
+    return torch.sum(torch.square(term.raw_action[:, self.arm_cols]), dim=1) * term.overridden.float()
+
+
+# --- Critic input in the robot's frame (so it can be mirrored) ----------------
+
+
+def foot_contact_forces_yaw(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
+  """Unitree's foot_contact_forces (sign * log(1 + |f|) per component), with each
+  foot's force turned into the robot's heading frame instead of the world frame,
+  so a left-right mirror is a sign flip of y. Critic only. [B, feet * 3]"""
+  sensor: ContactSensor = env.scene[sensor_name]
+  force = sensor.data.force  # [B, feet, 3], world frame (reduce="netforce")
+  assert force is not None
+  heading = yaw_quat(env.scene["robot"].data.root_link_quat_w)
+  heading = heading.unsqueeze(1).expand(-1, force.shape[1], -1)
+  local = quat_apply_inverse(heading.reshape(-1, 4), force.reshape(-1, 3)).view_as(force).flatten(1)
+  return torch.sign(local) * torch.log1p(torch.abs(local))
+
+
+# --- Assistive upward force (training only) -----------------------------------
+
+
+def assist_fraction(env: ManagerBasedRlEnv, max_fraction: float, cutoff_level: float) -> float:
+  """Share of the robot's weight carried by the assist force: `max_fraction` when
+  the robots' mean terrain level is 0, fading to 0 at `cutoff_level`
+  (Watch Your Step, arXiv 2610.29612, p.4). 0 without a terrain curriculum."""
+  levels = getattr(env.scene.terrain, "terrain_levels", None) if env.scene.terrain is not None else None
+  if levels is None or max_fraction <= 0:
+    return 0.0
+  mean_level = levels.float().mean().item()
+  return max(0.0, min(max_fraction, max_fraction * (1.0 - mean_level / cutoff_level)))
+
+
+def assist_force(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | None,
+  max_fraction: float,
+  cutoff_level: float,
+  body_name: str = "pelvis",
+) -> None:
+  """Reset event: an upward force on the pelvis, a share of the robot's weight,
+  that lasts the whole episode (MuJoCo keeps applied forces until changed). Like
+  a harness: young robots survive long enough to learn stepping, and the help is
+  gone before the hard terrain. A2CF (arXiv 2506.23125, p.6): on the G1, the top
+  terrain level at ~4k iterations instead of ~10k."""
+  robot = env.scene["robot"]
+  body_ids, _ = robot.find_bodies(body_name)
+  if not hasattr(env, "_g1_comp_robot_weight"):
+    root = int(robot.indexing.body_ids[body_ids[0]])
+    env._g1_comp_robot_weight = float(env.sim.mj_model.body_subtreemass[root]) * 9.81
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device)
+  lift = assist_fraction(env, max_fraction, cutoff_level) * env._g1_comp_robot_weight
+  forces = torch.zeros(len(env_ids), 1, 3, device=env.device)
+  forces[..., 2] = lift
+  robot.write_external_wrench_to_sim(forces, torch.zeros_like(forces), env_ids=env_ids, body_ids=body_ids)
+
+
+def assist_force_log(
+  env: ManagerBasedRlEnv, env_ids: torch.Tensor, max_fraction: float, cutoff_level: float
+) -> dict[str, torch.Tensor]:
+  """Curriculum term that only logs the assist share (TensorBoard: Curriculum/assist)."""
+  del env_ids  # Unused.
+  return {"weight_share": torch.tensor(assist_fraction(env, max_fraction, cutoff_level))}
+
+
+# --- Unsafe stepping penalty ---------------------------------------------------
+# Our stair treads (24 cm) leave ~3.5 cm around the 20.6 cm foot. Two small
+# penalties, after "Omnidirectional Humanoid Locomotion on Stairs via Unsafe
+# Stepping Penalty" (arXiv 2603.07928), which reports near-100% safe steps in sim.
+
+
+def foot_on_edge(
+  env: ManagerBasedRlEnv,
+  sensor_names: tuple[str, ...],
+  patch_shape: tuple[int, int],
+  contact_sensor_name: str,
+  edge_height: float,
+) -> torch.Tensor:
+  """Number of feet standing on a step edge: in contact, with neighbouring ground
+  points under the sole more than `edge_height` apart (part of the sole hangs over
+  a drop or presses against a rise). 15° ramps give ~1 cm, so they don't count. [B]"""
+  contact: ContactSensor = env.scene[contact_sensor_name]
+  assert contact.data.found is not None
+  on_ground = contact.data.found > 0  # [B, feet], [left, right]
+  rows, cols = patch_shape
+  edges = []
+  for name in sensor_names:
+    data = env.scene[name].data
+    # A ray that hits nothing reads as a deep drop.
+    z = torch.where(data.distances >= 0, data.hit_pos_w[..., 2], data.pos_w[:, 2:3] - 3.0)
+    grid = z.view(-1, rows, cols)
+    along = (grid[:, :, 1:] - grid[:, :, :-1]).abs().flatten(1).amax(dim=1)
+    across = (grid[:, 1:, :] - grid[:, :-1, :]).abs().flatten(1).amax(dim=1)
+    edges.append(torch.maximum(along, across) > edge_height)
+  return (torch.stack(edges, dim=1) & on_ground).float().sum(dim=1)
+
+
+def foot_stumble(
+  env: ManagerBasedRlEnv, contact_sensor_name: str, ratio: float = 5.0, min_force: float = 5.0
+) -> torch.Tensor:
+  """Number of feet pushed mostly sideways by the ground, e.g. a toe hitting a
+  stair riser: horizontal force over `ratio` times the vertical (legged_gym's
+  stumble test). [B]"""
+  contact: ContactSensor = env.scene[contact_sensor_name]
+  force = contact.data.force
+  assert force is not None
+  horizontal = torch.norm(force[..., :2], dim=-1)
+  hit = (horizontal > ratio * force[..., 2].abs()) & (horizontal > min_force)
+  return hit.float().sum(dim=1)

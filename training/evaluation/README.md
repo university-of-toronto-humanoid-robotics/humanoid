@@ -1,66 +1,51 @@
-# Mobility route preview
+# Competition course evaluation
 
-This is a static, editable route proposal for the Mobility Trial on the
-competition course. It belongs to the training/evaluation workflow. The script
-reads `sim/competition/course_heightmap.npz` as source data and does not modify
-the course, ROS stack, or simulation XML.
+This runs a compatible G1 height-map checkpoint through the competition course
+along the predetermined outbound and return route in `mobility_route.json`. A
+pure-pursuit-style look-ahead controller turns the route into velocity commands;
+proportional feedback adjusts the forward command toward the target speed.
 
-`mobility_route.json` lists CAD-frame waypoints in outbound order. The return
-path follows the same points in reverse. The A–D target circles and ending
-location are **estimates** from page 3 of the competition rules, not surveyed
-CAD coordinates. `P1`–`P4` go around the open door leaf, `P6`–`P7` pass the
-partition, and `P8`–`P10` line up with the stairs.
+## Run with a checkpoint
 
-From the repository root, regenerate `mobility_route_preview.png` after edits:
+From the repository root, activate the mjlab environment and move to `training/`:
 
 ```bash
-.venv-mjlab/bin/python training/evaluation/preview_mobility_route.py
+source .venv-mjlab/bin/activate
+cd training
 ```
 
-This needs NumPy, SciPy, and Matplotlib. The script prints waypoint coordinates
-and samples each straight segment and the smoothed path against a 2D wall/fixture mask. Stairs,
-landing, ramps, step-over beams, and the door sill are treated as walkable. The
-current minimum sampled clearance is 0.28 m, above the provisional 0.20 m
-screening margin. This centre-line check is not a full robot-body or 3D
-collision guarantee. No policy or route controller runs in this stage.
-
-## Run the policy on the route
-
-From `training/`, with `.venv-mjlab` activated:
+For Viser, run the evaluator and open the local URL it prints:
 
 ```bash
-python scripts/eval_course_route.py --viewer viser
+python scripts/eval_course_route.py --viewer viser \
+  --checkpoint models/best_g1_rough_heightmap/model_5996.pt
 ```
 
-To watch without saving metrics or writing any evaluation files, add `--no-log`.
-
-Open the local URL printed by the script. Viser uses the next available port
-if 8080 is already occupied. The default checkpoint is
-`models/best_g1_rough_heightmap/model_5996.pt`; use `--checkpoint PATH` to
-choose another compatible model. The evaluator creates a dedicated
-`G1-Course-HeightMap` task with the same actor observations and 29 joint actions
-as `G1-Rough-HeightMap`. It loads the existing CAD course from `sim/competition/`
-without modifying any ROS or course assets.
-Use Viser's Reset Environment button for another trial, or press Ctrl+C in
-the terminal to close the viewer and write the current trial summary.
-
-The path uses short quadratic curves at clear via-point corners. Target-circle
-centres, the door route, and the stair centreline remain fixed. The controller
-uses the simulated robot pose and sends body-frame forward, lateral, and yaw
-velocity commands at each 0.02 s policy step. At the ending location it turns
-around and follows the same path back. The Viser route overlay and results
-both use CAD-frame waypoint coordinates.
-
-Results go to `training/logs/route_eval/<timestamp>/`: one CSV of step-by-step
-pose, commands, progress, and path error, one JSON summary of time, falls, and
-foot target hits, and a copy of the route JSON. A target hit requires a foot
-site inside the estimated circle while that foot's terrain contact sensor
-reports contact. The foot site is used as the location proxy for the sole.
-The run stops on a fall, route completion, or the 300 s default simulated-time
-limit. `--max-seconds` changes the limit; `--viewer none` runs without a browser.
-
-For a quick CPU check:
+On macOS, use `mjpython` for a local MuJoCo window:
 
 ```bash
-python scripts/eval_course_route.py --viewer none --max-seconds 2
+mjpython scripts/eval_course_route.py --viewer native \
+  --checkpoint models/best_g1_rough_heightmap/model_5996.pt
 ```
+
+Replace the checkpoint path with any checkpoint from the compatible
+`G1-Flat-HeightMap`, `G1-Rough-HeightMap`, `G1-Open-HeightMap`, or
+`G1-Open-Maze-HeightMap` family. The evaluator uses `G1-Course-HeightMap`, which
+has the same policy observation and action layout.
+
+| Argument | Meaning |
+|---|---|
+| `--checkpoint PATH` | Model to evaluate; defaults to `models/best_g1_rough_heightmap/model_5996.pt`. |
+| `--viewer OPTION` | `viser` (browser, default), `native` (local MuJoCo window), or `none`. Use `mjpython` with `native` on macOS. |
+| `--route PATH` | Route JSON; defaults to `evaluation/mobility_route.json`. |
+| `--max-seconds N` | Simulated-time limit; defaults to 300 seconds. |
+| `--output DIR` | Results directory; defaults to `logs/route_eval/<timestamp>/`. |
+| `--no-log` | Visualize without saving evaluation files. |
+
+With logging enabled, the evaluator saves step-by-step CSV data, a JSON trial
+summary, and a copy of the route. The route waypoints can be edited in
+`mobility_route.json`.
+
+**Map input:** The policy currently receives a ground-truth terrain height map
+from simulation. Observation noise and mapping errors are disabled in this
+evaluation.
