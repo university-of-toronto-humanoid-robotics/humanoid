@@ -1,0 +1,12 @@
+# The navigator's test: it walks ros2_ws/src/navigation/routes/start_area_loop.yaml in the course's flat start area,
+# steering by the localizer's pose (not the true one, as the scripted scenarios do). At the end the sim reports how
+# far the true pelvis ended from the route's last stop.
+scene: sim/g1_course_scene.xml
+spawn: {x: 11.6, y: 4.2, yaw: 3.141592653589793}
+duration: 150.0
+policy:
+  type: rsl_rl_g1_flat
+  checkpoint: training/models/g1_walk/model_12400.pt
+motion:
+  type: navigator
+  route: start_area_loop

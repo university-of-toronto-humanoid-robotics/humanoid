@@ -10,7 +10,7 @@ Controls (as on the Unitree remote: left stick walks, right stick turns):
   left stick left / right   step left / right
   right stick left / right  turn left / right
   OPTIONS                   start: unlock driving (Unitree: START)
-  CIRCLE                    stop and lock (Unitree: L2 + B)
+  CIRCLE                    stop and lock (Unitree: L2 + B); also stops the navigator
   SHARE                     stop, lock, and stand a fallen robot up (sim testing only)
 
 It starts locked, so the robot stands still until OPTIONS is pressed with the
@@ -35,7 +35,7 @@ import sys
 import threading
 import time
 
-from teleop.keyboard_teleop import LIMITS, PUBLISH_HZ, Command, ResetRequest, status_line
+from teleop.keyboard_teleop import CMD_TOPIC, LIMITS, PUBLISH_HZ, Command, NavigatorStop, ResetRequest, status_line
 
 # joy's game_controller_node, which gives every recognised controller (PS4, Xbox,
 # ...) the same standard layout whatever the driver. Left and up are positive, as
@@ -89,6 +89,8 @@ class Gamepad:
         self.seen: float | None = None
         self.reset_held = False
         self.reset_wanted = False
+        self.stop_held = False
+        self.stop_wanted = False
 
     def update(self, axes, buttons, now: float) -> None:
         def pressed(name: str) -> bool:
@@ -102,12 +104,20 @@ class Gamepad:
             self.reset_wanted = True
             self.locked = True  # the robot comes back standing still: OPTIONS again to drive
         self.reset_held = pressed('button_reset')
+        if pressed('button_stop') and not self.stop_held:  # once per press: also stops the navigator
+            self.stop_wanted = True
+        self.stop_held = pressed('button_stop')
         if pressed('button_stop'):  # stop wins if both are held
             self.locked = True
         elif pressed('button_start') and self.centred():
             # Only with the sticks let go, so unlocking never starts a move by
             # itself (a pushed stick, or a wrong axis number resting off zero).
             self.locked = False
+
+    def take_stop(self) -> bool:
+        """Whether CIRCLE was pressed since the last call."""
+        wanted, self.stop_wanted = self.stop_wanted, False
+        return wanted
 
     def take_reset(self) -> bool:
         """Whether SHARE was pressed since the last call."""
@@ -150,7 +160,7 @@ def main() -> None:
     node = rclpy.create_node('gamepad_teleop')
     pad = Gamepad({name: node.declare_parameter(name, value).value for name, value in DEFAULTS.items()})
 
-    cmd_pub = node.create_publisher(Twist, '/cmd_vel', 10)
+    cmd_pub = node.create_publisher(Twist, CMD_TOPIC, 10)
     latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     mode_pub = node.create_publisher(String, '/g1/autonomy_mode', latched)
     mode_pub.publish(String(data='teleop'))
@@ -168,6 +178,7 @@ def main() -> None:
     node.create_subscription(TwistStamped, '/g1/velocity', on_velocity, 10)
     node.create_subscription(Float32, '/g1/tilt', on_tilt, 10)
     reset = ResetRequest(node)
+    nav_stop = NavigatorStop(node)
     node.create_subscription(Joy, '/joy', lambda m: pad.update(m.axes, m.buttons, time.monotonic()), 10)
 
     def publish(c: Command) -> None:
@@ -197,11 +208,13 @@ def main() -> None:
             now = time.monotonic()
             if pad.take_reset():
                 reset.request()
+            if pad.take_stop():
+                nav_stop.request()
             cmd = pad.command(now)
             publish(cmd)
             if show:
                 age = None if state['seen'] is None else now - state['seen']
-                others = max(0, node.count_publishers('/cmd_vel') - 1)
+                others = max(0, node.count_publishers(CMD_TOPIC) - 1)
                 line = status_line(cmd, state['velocity'], state['tilt'], age, others)
                 sys.stdout.write('\r\033[K' + line + ' | ' + (reset.note() or pad.note(now)))
                 sys.stdout.flush()

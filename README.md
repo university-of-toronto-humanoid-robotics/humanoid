@@ -21,7 +21,8 @@ ros2_ws/src/
   bridge/        sim ⇄ ROS 2
   teleop/        gamepad/keyboard
   policy/        walk_controller: runs a trained walking policy
-  perception/    SLAM (vendored fast_lio, livox driver)
+  navigation/    navigator: walks a route of waypoints on the course
+  perception/    SLAM (vendored fast_lio, livox driver), localization on the course map
 training/        RL: Unitree's code (submodule) + our trained models
 tools/           scripts, motion files
 ```

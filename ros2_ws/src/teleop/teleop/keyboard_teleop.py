@@ -13,8 +13,10 @@ released, so holding keys isn't used):
   space   stop                  Ctrl+C  stop and quit
 
 Publishes:
-  /cmd_vel             geometry_msgs/Twist   20 Hz, clamped to what the policy was trained on
+  /cmd_vel/teleop      geometry_msgs/Twist   20 Hz, clamped to what the policy was trained on. bringup's
+                       cmd_vel_mux passes it on to /cmd_vel: a non-zero command takes over from the navigator
   /g1/autonomy_mode    std_msgs/String       "teleop" (the declared autonomy level), latched
+Calls /navigator/stop on the stop key, so stop also halts a route the navigator is walking.
 Reads (from the robot, or the sim's ROS bridge):
   /g1/velocity         geometry_msgs/TwistStamped   measured velocity, body frame
   /g1/tilt             std_msgs/Float32             degrees from upright
@@ -39,6 +41,7 @@ KEYS = {'w': ('x', +1), 's': ('x', -1), 'a': ('y', +1), 'd': ('y', -1), 'q': ('y
 STOP_KEYS = (' ', 'x')
 RESET_KEY = 'r'
 PUBLISH_HZ = 20.0
+CMD_TOPIC = '/cmd_vel/teleop'   # cmd_vel_mux (ros2_ws/src/navigation) passes it on to /cmd_vel
 LINK_TIMEOUT = 1.0  # s without robot status before the link counts as lost
 FALLEN_TILT = 45.0  # degrees
 HELP = """\
@@ -122,6 +125,21 @@ class ResetRequest:
         return self.text if self.text and time.monotonic() - self.when < self.SHOW_FOR else ''
 
 
+class NavigatorStop:
+    """Stops the navigator (/navigator/stop) when the operator presses stop, if it is running."""
+
+    SERVICE = '/navigator/stop'
+
+    def __init__(self, node):
+        from std_srvs.srv import Trigger
+        self.trigger = Trigger
+        self.client = node.create_client(Trigger, self.SERVICE)
+
+    def request(self) -> None:
+        if self.client.service_is_ready():
+            self.client.call_async(self.trigger.Request())
+
+
 class RawTerminal:
     """Read single key presses without Enter, and restore the terminal on exit."""
 
@@ -156,7 +174,7 @@ def main() -> None:
     # Our own Ctrl+C handling: rclpy's would shut ROS down before the final stop is sent.
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = rclpy.create_node('keyboard_teleop')
-    cmd_pub = node.create_publisher(Twist, '/cmd_vel', 10)
+    cmd_pub = node.create_publisher(Twist, CMD_TOPIC, 10)
     latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     mode_pub = node.create_publisher(String, '/g1/autonomy_mode', latched)
     mode_pub.publish(String(data='teleop'))
@@ -174,6 +192,7 @@ def main() -> None:
     node.create_subscription(TwistStamped, '/g1/velocity', on_velocity, 10)
     node.create_subscription(Float32, '/g1/tilt', on_tilt, 10)
     reset = ResetRequest(node)
+    nav_stop = NavigatorStop(node)
 
     cmd = Command()
 
@@ -209,12 +228,14 @@ def main() -> None:
                     reset.request()
                 elif key is not None:
                     cmd.press(key)
+                    if key in STOP_KEYS:
+                        nav_stop.request()
                 if time.monotonic() >= next_publish:
                     next_publish += period
                     publish(cmd)
                     seen = state['seen']
                     age = None if seen is None else time.monotonic() - seen
-                    others = max(0, node.count_publishers('/cmd_vel') - 1)
+                    others = max(0, node.count_publishers(CMD_TOPIC) - 1)
                     line = status_line(cmd, state['velocity'], state['tilt'], age, others)
                     if reset.note():
                         line += ' | ' + reset.note()
