@@ -35,13 +35,16 @@ from mjlab.terrains.utils import make_plane
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COURSE_DIR = REPO_ROOT / "sim" / "competition"
 
-STAIR_HEIGHTS = (0.05, 0.23)  # m, easiest to hardest curriculum row (course risers: 0.203)
+# m, easiest to hardest curriculum row (course risers: 0.203). Starts at 0 like
+# Unitree's (0-10 cm): starting at 5 cm made 60% of the easiest tiles stairs, and
+# robots that couldn't walk yet kept tripping and never learned to (rough1, rough2).
+STAIR_HEIGHTS = (0.0, 0.23)
 
 
-def comp_rough_terrains_cfg() -> TerrainGeneratorCfg:
+def comp_rough_terrains_cfg(stair_height_range: tuple[float, float] = STAIR_HEIGHTS) -> TerrainGeneratorCfg:
   """Rough terrain with competition-height stairs. "up" spawns at the bottom of a
   stepped pit, "down" on top of a stepped pyramid."""
-  stairs = dict(step_height_range=STAIR_HEIGHTS, platform_width=3.0, border_width=1.0)
+  stairs = dict(step_height_range=stair_height_range, platform_width=3.0, border_width=1.0)
   return TerrainGeneratorCfg(
     size=(8.0, 8.0),
     border_width=20.0,

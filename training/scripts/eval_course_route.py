@@ -16,6 +16,7 @@ from pathlib import Path
 import traceback
 
 import _setup  # noqa: F401  (registers the local tasks)
+import mujoco
 import numpy as np
 import torch
 
@@ -30,7 +31,7 @@ from evaluation.route import (
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
-from mjlab.viewer import ViserPlayViewer
+from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 from mjlab.viewer.base import VerbosityLevel
 
 
@@ -87,6 +88,9 @@ class RouteEvaluation:
     self.last_cross_track = 0.0
     self.progress = 0.0
     self.next_goal = "A1"
+    self.measured_vx = 0.0
+    self.target_vx = 0.0
+    self.command_vx = 0.0
     self.foot_hits: dict[str, list[dict]] = {"outbound": [], "return": []}
     self._seen: dict[str, set[str]] = {"outbound": set(), "return": set()}
     if self.record_metrics:
@@ -95,7 +99,8 @@ class RouteEvaluation:
       self._csv_file = (self.output / f"trial_{self.trial_no:03d}.csv").open("w", newline="")
       self.writer = csv.writer(self._csv_file)
       self.writer.writerow(("time_s", "phase", "cad_x", "cad_y", "heading_rad", "progress",
-                            "cross_track_m", "next_goal", "cmd_vx", "cmd_vy", "cmd_yaw"))
+                            "cross_track_m", "next_goal", "target_vx", "measured_vx",
+                            "cmd_vx", "cmd_vy", "cmd_yaw"))
     self._write_command(0, 0, 0)
 
   def _check_foot_targets(self) -> None:
@@ -128,7 +133,10 @@ class RouteEvaluation:
     if self.record_metrics:
       self._check_foot_targets()
     yaw = float(self.robot.data.heading_w[0].item())
-    command = self.follower.update(cad_xy, yaw)
+    self.measured_vx = float(self.robot.data.root_link_lin_vel_b[0, 0].item())
+    command = self.follower.update(cad_xy, yaw, self.measured_vx, self.base.step_dt)
+    self.target_vx = self.follower.target_vx
+    self.command_vx = command.vx
     self.progress = command.progress
     self.next_goal = command.next_goal
     if command.phase == "complete":
@@ -149,7 +157,8 @@ class RouteEvaluation:
       self.writer.writerow((round((self.step_count - 1) * self.base.step_dt, 3), command.phase,
                             round(float(cad_xy[0]), 4), round(float(cad_xy[1]), 4),
                             round(yaw, 4), round(command.progress, 5), round(error, 4),
-                            command.next_goal, round(command.vx, 4), round(command.vy, 4),
+                            command.next_goal, round(self.target_vx, 4), round(self.measured_vx, 4),
+                            round(command.vx, 4), round(command.vy, 4),
                             round(command.yaw_rate, 4)))
     if bool(dones[0].item()):
       self.finish("fall" if bool(self.base.reset_terminated[0].item()) else "env_timeout")
@@ -163,6 +172,8 @@ class RouteEvaluation:
     if self.status != "running":
       return
     self.status = status
+    self.target_vx = 0.0
+    self.command_vx = 0.0
     self._write_command(0, 0, 0)
     if not self.record_metrics:
       print(f"Trial {self.trial_no}: {status}")
@@ -245,6 +256,8 @@ class RouteViewer(ViserPlayViewer):
       f"<b>Phase:</b> {ev.follower.phase}<br>"
       f"<b>Next target:</b> {ev.next_goal or '—'}<br>"
       f"<b>Progress:</b> {ev.progress:.1%}<br>"
+      f"<b>Forward speed (target / measured / command):</b> "
+      f"{ev.target_vx:.2f} / {ev.measured_vx:.2f} / {ev.command_vx:.2f} m/s<br>"
     )
     if ev.record_metrics:
       info += (
@@ -276,11 +289,95 @@ class RouteViewer(ViserPlayViewer):
     self._refresh_info()
 
 
+class NativeRouteViewer(NativeMujocoViewer):
+  """Run the same route controller in a local MuJoCo window."""
+
+  def __init__(self, evaluator: RouteEvaluation) -> None:
+    super().__init__(evaluator.env, evaluator.policy, verbosity=VerbosityLevel.INFO)
+    self.evaluator = evaluator
+    self.route_lines: list[tuple[np.ndarray, np.ndarray, tuple[float, ...], float]] = []
+    self.goal_markers: list[tuple[np.ndarray, str]] = []
+    self._prepare_route()
+
+  def _prepare_route(self) -> None:
+    ev = self.evaluator
+    offset = ev.origin_xy - COURSE_START_XY
+    for path, color, width in ((ev.outbound, (0.0, 0.85, 1.0, 1.0), 3.0),
+                               (ev.returning, (1.0, 0.43, 0.0, 1.0), 2.0)):
+      xy = path.xy[::10]
+      if not np.array_equal(xy[-1], path.xy[-1]):
+        xy = np.vstack((xy, path.xy[-1]))
+      xyz = np.column_stack((xy + offset, ev.course.heights_at(xy) + 0.07))
+      self.route_lines.extend((a, b, color, width) for a, b in zip(xyz[:-1], xyz[1:]))
+    for point in ev.route["waypoints"]:
+      if point["kind"] not in {"goal", "start", "end"}:
+        continue
+      centre = np.array([point["x"], point["y"]])
+      angle = np.linspace(0, 2 * np.pi, 41)
+      xy = centre + ev.route["goal_radius_m"] * np.column_stack((np.cos(angle), np.sin(angle)))
+      xyz = np.column_stack((xy + offset, ev.course.heights_at(xy) + 0.09))
+      self.route_lines.extend((a, b, (1.0, 0.88, 0.2, 1.0), 2.0)
+                              for a, b in zip(xyz[:-1], xyz[1:]))
+      self.goal_markers.append((np.array([*centre + offset, ev.course.heights_at(centre) + 0.15]),
+                                point["id"]))
+
+  def _update_debug_visualizers(self, viewer: mujoco.viewer.Handle) -> None:
+    super()._update_debug_visualizers(viewer)
+    scene = viewer.user_scn
+    for start, end, color, width in self.route_lines:
+      if scene.ngeom >= scene.maxgeom:
+        break
+      geom = scene.geoms[scene.ngeom]
+      scene.ngeom += 1
+      mujoco.mjv_initGeom(geom, mujoco.mjtGeom.mjGEOM_LINE, np.zeros(3),
+                         np.zeros(3), np.zeros(9), np.asarray(color, dtype=np.float32))
+      mujoco.mjv_connector(geom, mujoco.mjtGeom.mjGEOM_LINE, width, start, end)
+      geom.category = mujoco.mjtCatBit.mjCAT_DECOR
+    for pos, label in self.goal_markers:
+      if scene.ngeom >= scene.maxgeom:
+        break
+      geom = scene.geoms[scene.ngeom]
+      scene.ngeom += 1
+      mujoco.mjv_initGeom(geom, mujoco.mjtGeom.mjGEOM_SPHERE, np.array([0.045, 0, 0]),
+                         pos, np.eye(3).ravel(), np.array([1.0, 0.88, 0.2, 1.0]))
+      geom.category = mujoco.mjtCatBit.mjCAT_DECOR
+      geom.label = label
+
+  def _set_status_overlay(self, viewer: mujoco.viewer.Handle) -> None:
+    ev = self.evaluator
+    viewer.set_texts((
+      mujoco.mjtFontScale.mjFONTSCALE_150.value,
+      mujoco.mjtGridPos.mjGRID_TOPLEFT.value,
+      "Status\nPhase\nNext target\nProgress\nSpeed target / actual / command\nTime",
+      f"{ev.status}\n{ev.follower.phase}\n{ev.next_goal or '—'}\n"
+      f"{ev.progress:.1%}\n{ev.target_vx:.2f} / {ev.measured_vx:.2f} / {ev.command_vx:.2f} m/s\n"
+      f"{ev.step_count * ev.base.step_dt:.1f} s",
+    ))
+
+  def _execute_step(self) -> bool:
+    try:
+      self.evaluator.step()
+      self._step_count += 1
+      self._stats_steps += 1
+      if self.evaluator.status != "running":
+        self.pause()
+      return True
+    except Exception:
+      self._last_error = traceback.format_exc()
+      self.log(self._last_error, VerbosityLevel.SILENT)
+      self.pause()
+      return False
+
+  def reset_environment(self) -> None:
+    super().reset_environment()
+    self.evaluator.reset_trial()
+
+
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
   parser.add_argument("--route", type=Path, default=ROUTE)
-  parser.add_argument("--viewer", choices=("viser", "none"), default="viser")
+  parser.add_argument("--viewer", choices=("viser", "native", "none"), default="viser")
   parser.add_argument("--max-seconds", type=float, default=300.0)
   parser.add_argument("--output", type=Path)
   parser.add_argument("--no-log", action="store_true", help="Visualize without recording metrics or writing files")
@@ -314,6 +411,8 @@ def main() -> None:
         viewer = RouteViewer(evaluator)
         print(f"Open http://localhost:{viewer._server.get_port()} to see the route and robot.")
         viewer.run()
+      elif args.viewer == "native":
+        NativeRouteViewer(evaluator).run()
       else:
         while evaluator.status == "running":
           evaluator.step()

@@ -46,6 +46,10 @@ class ArmOverrideJointPositionActionCfg(JointPositionActionCfg):
   arm_joint_names: tuple[str, ...] = ARM_JOINTS
   override_prob: float = 0.3
   """Share of time the arms are overridden."""
+  standing_override_prob: float | None = None
+  """Share of time the arms are overridden while the robot is told to stand still
+  (on the robot, that is when the IK uses the arms). None: same as override_prob."""
+  velocity_command_name: str = "twist"
   segment_time_range: tuple[float, float] = (2.0, 6.0)
   """How long each overridden / not-overridden stretch lasts, in seconds."""
   goal_time_range: tuple[float, float] = (0.5, 2.0)
@@ -108,7 +112,12 @@ class ArmOverrideJointPositionAction(JointPositionAction):
     self._segment_left -= dt
     switch = (self._segment_left <= 0).nonzero().flatten()
     if len(switch):
-      starting = torch.rand(len(switch), device=self.device) < self.cfg.override_prob
+      prob = torch.full((len(switch),), float(self.cfg.override_prob), device=self.device)
+      if self.cfg.standing_override_prob is not None:
+        twist = self._env.command_manager.get_command(self.cfg.velocity_command_name)[switch]
+        standing = torch.norm(twist[:, :2], dim=1) + torch.abs(twist[:, 2]) < 0.1
+        prob = torch.where(standing, torch.full_like(prob, float(self.cfg.standing_override_prob)), prob)
+      starting = torch.rand(len(switch), device=self.device) < prob
       was = self.overridden[switch]
       self.overridden[switch] = starting
       begin = switch[starting & ~was]

@@ -1,9 +1,10 @@
 #!/bin/bash
-# Train a G1-Comp task on one GPU with Slurm (Digital Research Alliance of Canada).
+# Train one of our G1 tasks on one GPU with Slurm (Digital Research Alliance of Canada).
 #
-#   sbatch training/cluster/train.sbatch                          # full run
 #   SMOKE=1 sbatch --time=0:30:00 training/cluster/train.sbatch   # 30-iteration test first
-#   TASK=G1-Comp-Course ITERATIONS=3000 sbatch training/cluster/train.sbatch
+#   sbatch training/cluster/train.sbatch                          # the base model: Flat, 3,000 iterations
+#   TASK=Open FROM=<flat model_<N>.pt> ITERATIONS=8000 sbatch training/cluster/train.sbatch
+#   TASK=Competition FROM=<open model_<N>.pt> ITERATIONS=1000 sbatch training/cluster/train.sbatch
 #
 # Watch: squeue -u $USER ; tail -f slurm-<jobid>.out
 # Results: $RUN_DIR/logs/rsl_rl/<experiment>/<date>_<run name>/model_<N>.pt
@@ -25,16 +26,18 @@ VENV_DIR="${VENV_DIR:-$HOME/venvs/mjlab}"
 RUN_DIR="${RUN_DIR:-$SCRATCH/humanoid_runs}"      # checkpoints and logs (scratch: big, not backed up)
 PYTHON_MODULE="${PYTHON_MODULE:-python/3.12}"
 CUDA_MODULE="${CUDA_MODULE:-cuda/12.6}"
-TASK="${TASK:-G1-Comp-Rough}"
+TASK="${TASK:-Flat}"                              # Flat, Ramp, Stairs, Open, Rough, VeryRough, Competition, <Task>-Crouch
 NUM_ENVS="${NUM_ENVS:-4096}"                      # 4096 fits an H100 easily; try 8192 later
-ITERATIONS="${ITERATIONS:-10000}"
+ITERATIONS="${ITERATIONS:-3000}"
 RUN_NAME="${RUN_NAME:-${SLURM_JOB_ID:-local}}"
 RESUME_RUN="${RESUME_RUN:-}"                      # a run folder name to continue from, or empty
+FROM="${FROM:-}"                                  # or a model_<N>.pt to start from (any of the new tasks)
 SMOKE="${SMOKE:-0}"                               # 1 = 256 robots, 30 iterations
-# Crouching, arm override and extra standing robots ramp in between these iterations
-# (after the policy walks). Use 0 and 0 to have them on from the start.
+# The older G1-Comp-* tasks only (the new tasks ignore these): when their crouching,
+# arm override and extra standing robots ramp in, and their assist force.
 export G1_COMP_SKILLS_START="${SKILLS_START:-500}"
 export G1_COMP_SKILLS_FULL="${SKILLS_FULL:-2000}"
+export G1_COMP_ASSIST="${ASSIST:-0}"
 # ---------------------------------------------------------------------------------
 
 module load StdEnv/2023 "$PYTHON_MODULE" "$CUDA_MODULE"
@@ -61,6 +64,8 @@ ARGS=(
 )
 if [ -n "$RESUME_RUN" ]; then
   ARGS+=(--agent.resume True --agent.load-run "$RESUME_RUN")
+elif [ -n "$FROM" ]; then
+  ARGS+=(--from "$(realpath "$FROM")")
 fi
 
 echo "Training $TASK with $NUM_ENVS robots for $ITERATIONS iterations in $RUN_DIR"
