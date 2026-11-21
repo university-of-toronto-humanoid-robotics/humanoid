@@ -2,7 +2,8 @@
 
 In:  TF map -> pelvis   where the robot is on the course (the localizer's map -> odom, then FAST-LIO and the URDF)
      /goal_pose         a single place to walk to and stop at (RViz's "2D Goal Pose" button publishes this)
-Out: /cmd_vel           20 times a second while it is driving, for walk_controller
+Out: /cmd_vel/nav       20 times a second while it is driving. cmd_vel_mux passes it on to /cmd_vel for
+                        walk_controller, unless the operator has taken over
      ~/state            idle, following, aligning, waiting, arrived, stopped or lost (latched)
      ~/path             the route, for RViz (latched)
 Services (std_srvs/Trigger):
@@ -46,7 +47,7 @@ class Navigator(Node):
 
         self.buffer = Buffer()
         self.listener = TransformListener(self.buffer, self)
-        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel/nav', 10)
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.state_pub = self.create_publisher(String, '~/state', latched)
         self.path_pub = self.create_publisher(Path, '~/path', latched)
@@ -81,8 +82,12 @@ class Navigator(Node):
             return
         self.state = state
         self.state_pub.publish(String(data=state))
-        log = self.get_logger().warn if state in ('lost', 'stopped') else self.get_logger().info
-        log(f'State: {state}' + (f' ({why})' if why else ''))
+        text = f'State: {state}' + (f' ({why})' if why else '')
+        # One call per severity: rclpy refuses to log from the same line at a new severity.
+        if state in ('lost', 'stopped'):
+            self.get_logger().warn(text)
+        else:
+            self.get_logger().info(text)
 
     def begin(self, route):
         pose = self.pose()

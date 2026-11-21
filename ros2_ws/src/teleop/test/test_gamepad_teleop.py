@@ -110,3 +110,14 @@ def test_reset_button_locks_and_fires_once_per_press():
     pad.update(axes(), buttons(), now=0.3)
     pad.update(axes(), buttons(reset), now=0.4)  # pressed again
     assert pad.take_reset()
+
+
+def test_stop_button_asks_once_per_press_to_stop_the_navigator():
+    pad = Gamepad(DEFAULTS)
+    assert not pad.take_stop()
+    for t in (0.0, 0.05, 0.1):  # held for three messages
+        pad.update(axes(), buttons(STOP), now=t)
+    assert pad.take_stop() and not pad.take_stop()
+    pad.update(axes(), buttons(), now=0.15)
+    pad.update(axes(), buttons(STOP), now=0.2)
+    assert pad.take_stop()

@@ -142,6 +142,9 @@ def setup(context):
         ),
         # The operator's status line (ros2_ws/src/teleop): tilt and measured speed, from /lowstate and FAST-LIO.
         Node(package='teleop', executable='robot_status', parameters=[time]),
+        # One driver at a time: teleop (/cmd_vel/teleop) or the navigator (/cmd_vel/nav) to /cmd_vel. The operator
+        # wins: touching a stick stops the navigator.
+        Node(package='navigation', executable='cmd_vel_mux', parameters=[time]),
     ] + course_nodes
 
 

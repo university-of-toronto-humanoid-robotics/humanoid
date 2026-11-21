@@ -5,8 +5,8 @@ scene: sim/g1_course_scene.xml
 spawn: {x: 9.0, y: 3.5, yaw: 3.141592653589793}   # facing -x, toward the ramps
 duration: 150.0
 policy:
-  type: rsl_rl_g1_flat
-  checkpoint: training/models/g1_comp_crouch/model_799.pt #g1_walk/model_12400.pt #g1_rough/model_5996.pt #
+  type: rsl_rl_g1_heightmap
+  checkpoint: training/models/g1_open_heightmap/model_10992.pt   # walks both laps, true terrain or elevation map
 motion:
   type: waypoints
   speed: 0.4

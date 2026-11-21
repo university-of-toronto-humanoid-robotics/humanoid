@@ -13,5 +13,6 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    entry_points={'console_scripts': ['navigator = navigation.navigator_node:main']},
+    entry_points={'console_scripts': ['navigator = navigation.navigator_node:main',
+                                      'cmd_vel_mux = navigation.cmd_vel_mux:main']},
 )
