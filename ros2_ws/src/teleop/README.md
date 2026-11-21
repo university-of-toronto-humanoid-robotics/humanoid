@@ -11,14 +11,14 @@ then open three terminals and pick a test from [Tests](#new-tests).
 
 ## How it works
 
-teleop is the `/cmd_vel` source in the stack described in
+teleop is the operator's `/cmd_vel` source in the stack described in
 [`ros2_ws/src/README.md`](../README.md). Everything below the operator is the
 software that runs on the real G1, so the operator side is the same in sim and
 on the robot.
 
 ```
  OPERATOR STATION                                     ROBOT (bringup g1.launch.py: sim now, real G1 later)
- keyboard_teleop /  ── /cmd_vel, 20 Hz ─────────────▶ walk_controller → policy → /lowcmd → motors
+ keyboard_teleop /  ── /cmd_vel/teleop, 20 Hz ──────▶ cmd_vel_mux → walk_controller → policy → /lowcmd → motors
  gamepad_teleop
    status line      ◀── /g1/velocity, /g1/tilt ────── robot_status: measured motion and tilt
  camera window      ◀── /g1/head_camera/color/... ─── head camera (the D435i), compressed for Wi-Fi
@@ -37,8 +37,13 @@ on the robot.
   - `walk_controller` stops it 0.5 s after the last command, so a crashed or
     disconnected operator can't leave it walking.
   - Quitting teleop (Ctrl+C, closing the window) sends a stop.
-- **One operator:** the status line warns if another program also sends `/cmd_vel`.
-  The teleop scenarios make sure the sim itself sends none.
+- **One operator:** the status line warns if another program also sends `/cmd_vel/teleop`.
+  The teleop scenarios make sure the sim itself sends no `/cmd_vel`.
+- **Operator over navigator:** teleop publishes `/cmd_vel/teleop`, and `cmd_vel_mux`
+  (ros2_ws/src/navigation) passes it on to `/cmd_vel`. A non-zero command takes over
+  from the navigator at once and stops it; the stop key (space) and CIRCLE also call
+  `/navigator/stop`. The navigator drives again only once teleop has sent only zeros
+  for 1 s and someone calls `/navigator/start`.
 
 ## [NEW] Set up once
 
@@ -114,7 +119,7 @@ have no motion script (the sim publishes no `/cmd_vel`) and reset after a fall.
 5. **Link lost:** `Ctrl+C` in terminal 1. The status line shows
    `ROBOT LINK LOST` within a second.
 6. **One operator:** with both `keyboard_teleop` and `gamepad_teleop` running,
-   each status line shows `WARNING: 1 other /cmd_vel source(s)`.
+   each status line shows `WARNING: 1 other /cmd_vel source(s)` (another `/cmd_vel/teleop` publisher).
 
 The scenario sets the policy. To try another model, edit the scenario or add
 `policy_type:=` and `checkpoint:=` to terminal 1's command.
@@ -328,7 +333,7 @@ by 100–300 ms over Wi-Fi.
 
 | Topic | Type | From |
 |---|---|---|
-| `/cmd_vel` | `geometry_msgs/Twist` | operator, 20 Hz |
+| `/cmd_vel/teleop` | `geometry_msgs/Twist` | operator, 20 Hz (`cmd_vel_mux` passes it on to `/cmd_vel`) |
 | `/g1/autonomy_mode` | `std_msgs/String` | operator: `teleop`, latched |
 | `/g1/velocity` | `geometry_msgs/TwistStamped` | robot (`robot_status`): measured velocity, heading frame |
 | `/g1/tilt` | `std_msgs/Float32` | robot (`robot_status`): degrees from upright |

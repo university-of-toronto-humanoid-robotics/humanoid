@@ -1,0 +1,11 @@
+# A loop in the course's flat start area (x 9.75-12.19, y 3.0-5.42), for testing navigation with a blind policy.
+# Starts near the spawn of sim/scenarios/course_start_navigate.yaml (11.6, 4.2, facing -x). Stays east of x = 10.8:
+# the open door leaf swings into the start area, out to about (10.55, 4.35). Ends lined up facing the door, the
+# way the robot would stop in front of something to press or open.
+speed: 0.4
+waypoints:
+  - {x: 11.0, y: 3.6}
+  - {x: 11.0, y: 4.9}
+  - {x: 11.8, y: 4.9, yaw: 0, wait: 1.0}           # stop and face +x, as if at a button
+  - {x: 11.8, y: 3.6}
+  - {x: 11.1, y: 4.2, yaw: 180, tolerance: 0.05}   # facing the door, 1.3 m back from it

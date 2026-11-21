@@ -1,0 +1,13 @@
+# The localizer's test: the competition course's flat start area (x 9.75-12.19), so a blind policy can walk it.
+# Starts facing the door (-x) and walks a 1 m x 1.4 m loop. At the end the sim reports how far /localizer/pose was
+# from the true pelvis pose. Try a wrong guess too: initial_pose:="11.9, 4.5, 165" (0.4 m and 15 deg off).
+scene: sim/g1_course_scene.xml
+spawn: {x: 11.6, y: 4.2, yaw: 3.141592653589793}
+duration: 120.0
+policy:
+  type: rsl_rl_g1_flat
+  checkpoint: training/models/g1_walk/model_12400.pt
+motion:
+  type: waypoints
+  speed: 0.4
+  points: [[10.5, 4.2], [10.5, 4.9], [11.5, 4.9], [11.5, 3.5], [10.5, 3.5], [10.5, 4.2]]

@@ -1,7 +1,7 @@
 """Motion scripts for mujoco_g1_walk_sim, chosen by a scenario's motion.type.
 
 Each gives the policy a velocity command (vx, vy, wz) in the robot's heading frame, from the time since walking
-started and the true pelvis pose. Add a new type by writing a class with command(), done and progress, and
+started and the true pelvis pose, except navigator, which hands the driving to the navigation package. Add a new type by writing a class with command(), done and progress, and
 registering it in MOTION_TYPES.
 """
 import numpy as np
@@ -79,7 +79,30 @@ class Operator:
         return 'operator driving'
 
 
-MOTION_TYPES = {'waypoints': Waypoints, 'velocity': VelocityScript, 'operator': Operator}
+class Navigator:
+    """The navigation package drives instead of a script: the sim calls /navigator/start and publishes no
+    /cmd_vel of its own. route names a file in ros2_ws/src/navigation/routes (without .yaml). The sim sets state
+    from /navigator/state."""
+
+    publishes = False
+
+    def __init__(self, route):
+        self.route = route
+        self.state = None
+
+    def command(self, t, pos, yaw):
+        return None
+
+    @property
+    def done(self):
+        return self.state == 'arrived'
+
+    @property
+    def progress(self):
+        return f'route "{self.route}" (navigator {self.state or "not started"})'
+
+
+MOTION_TYPES = {'waypoints': Waypoints, 'velocity': VelocityScript, 'operator': Operator, 'navigator': Navigator}
 
 
 def make_motion(config, speed=None):
