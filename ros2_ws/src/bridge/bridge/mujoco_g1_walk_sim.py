@@ -32,16 +32,17 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float32MultiArray, String
 from std_srvs.srv import Trigger
 from unitree_hg.msg import LowCmd, LowState
 
 from bridge import g1_model
+from bridge.head_camera import HeadCamera
 from bridge.height_scan import ScanMonitor, TrueTerrainScan
 from bridge.localization_monitor import LocalizationMonitor
-from bridge.motion import make_motion
+from bridge.motion import Navigator, make_motion
 from bridge.mujoco_mid360_sim import FRAME_SLICES, IMU_DT, SLICE_TICKS, STAMP_OFFSET, Mid360Sim, to_stamp
 from bridge.scenario import in_repo, load_scenario
 from policy import g1, lowcmd
@@ -51,6 +52,9 @@ FALLEN_HEIGHT = 0.45        # m, pelvis height above the ground below it, under 
 OPERATOR_TICKS = 4          # the operator's /cmd_vel and the true scan go out every 4th physics step: 50 Hz
 START_AFTER_ODOMETRY = 1.0  # s the operator waits after FAST-LIO's first pose before starting the controller
 MODE_MACHINE = 5            # what a 29-joint G1 reports as its type in /lowstate
+CAMERA_TICKS = 7            # the head camera renders every 7th physics step: about 29 Hz
+LIFT_TIME = 3.0             # s the gantry takes to lift a fallen robot upright (respawn): slow enough for FAST-LIO
+LIFT_SETTLE = 1.0           # s it then hangs still before the controller starts again
 N = len(g1.JOINTS)
 
 
@@ -123,19 +127,31 @@ class G1WalkSim(Node):
 
         # The operator, and the test instruments.
         self.clock_pub = self.create_publisher(Clock, '/clock', 10)
-        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        # The operator motion leaves /cmd_vel to teleop: not even advertising it, so teleop sees no other publisher.
+        self.scripted = getattr(self.motion, 'publishes', True)
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10) if self.scripted else None
         self.gt_pub = self.create_publisher(Odometry, '/ground_truth/odom', 10)
+        # The head camera, for the operator: camera:=false (or no GPU or display) runs without it.
+        self.camera = HeadCamera(self, self.model) if self.declare_parameter('camera', True).value else None
         self.true_scan_pub = self.create_publisher(Float32MultiArray, '/ground_truth/height_scan',
                                                    qos_profile_sensor_data)
         self.create_subscription(Odometry, '/Odometry', self.on_odometry, 100)
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(String, '/walk_controller/state', self.on_controller_state, latched)
         self.start_client = self.create_client(Trigger, '/walk_controller/start')
-        if getattr(self.motion, 'external', False):
+        if isinstance(self.motion, Navigator):
             self.navigator_client = self.create_client(Trigger, '/navigator/start')
             self.navigator_started, self.navigator_retry = False, 0.0
             self.create_subscription(String, '/navigator/state', self.on_navigator_state, latched)
         self.start_sent = False
+        # Sim testing only: a scenario with on_fall: respawn keeps running after a fall, and /sim/respawn stands
+        # the robot up where it is, back on the gantry, then starts the controller again (teleop: SHARE or r).
+        self.respawn = scenario.get('on_fall', 'end') == 'respawn'
+        self.respawn_pending = self.fallen = False
+        self.lift = None            # (start time, pelvis pose then, upright pose) while the gantry lifts the robot
+        if self.respawn:
+            self.reset_client = self.create_client(Trigger, '/walk_controller/reset')
+            self.create_service(Trigger, '/sim/respawn', self.on_respawn)
         self.true_scan = TrueTerrainScan(self.model, self.data)
         self.monitor = ScanMonitor(self)
         self.localization = LocalizationMonitor(self)
@@ -156,6 +172,54 @@ class G1WalkSim(Node):
 
     def on_controller_state(self, msg):
         self.controller_state = msg.data
+
+    def on_respawn(self, request, response):
+        # Runs on the ROS thread: reset the controller now, stand the robot up in the physics loop once it waits.
+        if not self.reset_client.service_is_ready():
+            response.success = False
+            response.message = 'walk_controller has no ~/reset (start it with bringup g1.launch.py)'
+            return response
+        self.reset_client.call_async(Trigger.Request())
+        self.respawn_pending = True
+        response.success = True
+        response.message = 'standing the robot up where it is; walking again in a few seconds'
+        return response
+
+    def respawn_in_place(self, t):
+        """Lift the robot upright where it is, facing the same way, on the gantry, as at the start.
+
+        The gantry takes hold of the pelvis where it lies and moves it to the standing pose over LIFT_TIME, so
+        the IMU and LiDAR see continuous motion: FAST-LIO loses track of a robot teleported upright.
+        """
+        x, y = self.data.qpos[:2]
+        w, qx, qy, qz = self.data.qpos[3:7]
+        yaw = np.arctan2(2.0 * (w * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+        upright = mujoco.MjData(self.model)   # where spawn() would stand it, without moving the real robot
+        upright.qpos[:] = self.data.qpos
+        g1_model.spawn(self.model, upright, x, y, yaw)
+        g1_model.hold_on_gantry(self.model, self.data)   # where it lies: no jump
+        # The motors as at the start: the standing pose with the training gains, until the controller takes over.
+        g1_model.set_motor_commands(self.model, self.data, q=g1.default_pose(), dq=np.zeros(N), tau=np.zeros(N),
+                                    kp=g1.stiffness(), kd=g1.damping())
+        self.lift = (t, self.data.qpos[:7].copy(), upright.qpos[:7].copy())
+        self.lowcmd, self.commanded = None, False
+        self.respawn_pending = False
+        self.get_logger().info(f'Respawn at t = {t:.1f} s: lifting the robot upright at ({x:.2f}, {y:.2f}), heading '
+                               f'{np.degrees(yaw):.0f} deg, over {LIFT_TIME:.0f} s.')
+
+    def update_lift(self, t):
+        start, lying, upright = self.lift
+        s = min((t - start) / LIFT_TIME, 1.0)
+        s = s * s * (3.0 - 2.0 * s)   # ease in and out
+        turns = Rotation.from_quat([np.roll(lying[3:], -1), np.roll(upright[3:], -1)])   # MuJoCo wxyz -> xyzw
+        q = Slerp([0.0, 1.0], turns)(s).as_quat()
+        pose = np.concatenate([lying[:3] + s * (upright[:3] - lying[:3]), np.roll(q, 1)])
+        self.model.equality(g1_model.GANTRY).data[3:10] = pose
+        if t - start >= LIFT_TIME + LIFT_SETTLE:
+            self.lift = None
+            self.start_sent, self.motion_start = False, None   # the usual start: controller, then let go
+            self.fallen = False
+            self.get_logger().info(f'Upright on the gantry at t = {t:.1f} s: starting the controller again.')
 
     def apply_lowcmd(self):
         msg, self.lowcmd = self.lowcmd, None
@@ -224,6 +288,10 @@ class G1WalkSim(Node):
 
     def operate(self, t):
         """The operator's part, and the true terrain scan for comparison."""
+        if self.respawn_pending and self.controller_state == 'wait' and self.lift is None:
+            self.respawn_in_place(t)
+        if self.lift is not None:
+            self.update_lift(t)
         if (not self.start_sent and self.errors and t >= self.errors[0][0] + START_AFTER_ODOMETRY
                 and self.start_client.service_is_ready()):
             self.start_sent = True
@@ -234,13 +302,13 @@ class G1WalkSim(Node):
             self.motion_start = t + self.hold
             self.get_logger().info(f'The controller is walking at t = {t:.1f} s: gantry released. Motion starts in '
                                    f'{self.hold:.0f} s.')
-        if getattr(self.motion, 'external', False):
-            # The navigator drives: ask it to start (again each second until it accepts), and leave /cmd_vel alone.
+        if isinstance(self.motion, Navigator):
+            # The navigator drives: ask it to start (again each second until it accepts).
             if self.moving and t >= self.motion_start and not self.navigator_started and t >= self.navigator_retry:
                 self.navigator_retry = t + 1.0
                 if self.navigator_client.service_is_ready():
                     self.navigator_client.call_async(Trigger.Request()).add_done_callback(self.on_navigator_start)
-        else:
+        if self.scripted:
             command = np.zeros(3)
             if self.moving and t >= self.motion_start:
                 command = self.motion.command(t - self.motion_start, *self.pelvis_pose())
@@ -272,6 +340,8 @@ class G1WalkSim(Node):
             time.sleep(0.1)
         self.get_logger().info(f'Running "{self.scenario_name}" for up to {self.duration:.0f} s of sim time.')
 
+        if self.camera is not None:
+            self.camera.start()   # before the viewer: see HeadCamera
         viewer = None
         if self.viewer:
             from mujoco import viewer as mujoco_viewer
@@ -301,6 +371,8 @@ class G1WalkSim(Node):
             self.publish_lowstate(tick)
             self.publish_imu(t)
             self.record_ground_truth(t)
+            if self.camera is not None and tick % CAMERA_TICKS == 0:
+                self.camera.render(self.data, to_stamp(t))
 
             if tick % SLICE_TICKS == 0:
                 if slices == FRAME_SLICES:
@@ -316,11 +388,14 @@ class G1WalkSim(Node):
                 points += self.trace_slice(offset_ns, slices * self.rays_per_slice)
                 slices += 1
 
-            if operator_tick and self.height_above_ground() < FALLEN_HEIGHT:
+            if operator_tick and self.height_above_ground() < FALLEN_HEIGHT and not self.fallen:
                 fell = True
                 self.get_logger().error(f'The robot fell at t = {t:.1f} s, near ({self.data.qpos[0]:.2f}, '
                                         f'{self.data.qpos[1]:.2f}), after {self.motion.progress}.')
-                break
+                if not self.respawn:
+                    break
+                self.fallen = True
+                self.get_logger().warn('Waiting for /sim/respawn (teleop: SHARE on the controller, or r).')
             if not self.start_sent and tick == int(10.0 / IMU_DT):
                 self.get_logger().warn('Still on the gantry after 10 s: the controller is only started once FAST-LIO '
                                        'publishes /Odometry and /walk_controller/start exists. Are both running?')
@@ -340,10 +415,12 @@ class G1WalkSim(Node):
         self.report()
         self.get_logger().info(self.monitor.report())
         self.get_logger().info(self.localization.report())
-        if getattr(self.motion, 'external', False) and self.motion.done:
+        if isinstance(self.motion, Navigator) and self.motion.done:
             self.report_route_end()
         if viewer is not None:
             viewer.close()
+        if self.camera is not None:
+            self.camera.close()
 
 
 def main():

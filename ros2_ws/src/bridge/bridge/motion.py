@@ -62,12 +62,29 @@ class VelocityScript:
         return f'{int(np.searchsorted(self.ends, self.t, side="right"))} of {len(self.segments)} segments'
 
 
-class Navigator:
-    """The navigation package drives instead of a script: the sim calls /navigator/start and stops publishing
-    /cmd_vel. route names a file in ros2_ws/src/navigation/routes (without .yaml). The sim sets state from
-    /navigator/state."""
+class Operator:
+    """No script: a person drives over /cmd_vel (ros2_ws/src/teleop), so the sim publishes none of its own."""
 
-    external = True
+    publishes = False
+
+    def command(self, t, pos, yaw):
+        return np.zeros(3)
+
+    @property
+    def done(self):
+        return False
+
+    @property
+    def progress(self):
+        return 'operator driving'
+
+
+class Navigator:
+    """The navigation package drives instead of a script: the sim calls /navigator/start and publishes no
+    /cmd_vel of its own. route names a file in ros2_ws/src/navigation/routes (without .yaml). The sim sets state
+    from /navigator/state."""
+
+    publishes = False
 
     def __init__(self, route):
         self.route = route
@@ -85,7 +102,7 @@ class Navigator:
         return f'route "{self.route}" (navigator {self.state or "not started"})'
 
 
-MOTION_TYPES = {'waypoints': Waypoints, 'velocity': VelocityScript, 'navigator': Navigator}
+MOTION_TYPES = {'waypoints': Waypoints, 'velocity': VelocityScript, 'operator': Operator, 'navigator': Navigator}
 
 
 def make_motion(config, speed=None):

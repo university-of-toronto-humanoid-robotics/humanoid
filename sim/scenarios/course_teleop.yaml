@@ -1,0 +1,13 @@
+# The competition course, driven by a person (ros2_ws/src/teleop), from the start area facing the door.
+# The flat walker handles the start area; the door's 7.7 cm sill and the step-over beams beyond it are too much
+# for it (course_teleop_heightmap carries a terrain-aware walker, from the deck).
+# Run: ros2 launch bringup g1.launch.py scenario:=course_teleop
+scene: sim/g1_course_scene.xml
+spawn: {x: 11.0, y: 4.21, yaw: 3.141592653589793}   # the "start" spawn in sim/competition/view_course.py
+duration: 3600.0
+policy:
+  type: rsl_rl_g1_flat
+  checkpoint: training/models/g1_walk/model_12400.pt
+motion:
+  type: operator                       # the sim publishes no /cmd_vel: see bridge/motion.py
+on_fall: respawn                       # testing only: SHARE / r stands a fallen robot up where it is

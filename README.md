@@ -42,6 +42,28 @@ tools/           scripts, motion files
 
 GUI windows open on your desktop (Windows) or at <http://localhost:8080/vnc.html> (Mac).
 
+## [NEW] Linux with Docker (any Ubuntu version)
+
+For an Ubuntu PC with an NVIDIA GPU that isn't on 24.04, or where you'd rather not install ROS natively.
+It's the same Jazzy image as on Windows and macOS.
+
+1. Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and the
+   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+   (including its "Configuring Docker" step), then `sudo usermod -aG docker $USER` and log out and back in.
+2. Check it: `docker run --rm --gpus all ubuntu nvidia-smi` lists your GPU.
+3. Start the container as above, with `<os>` = `linux` (VS Code: pick Linux).
+4. Before opening GUI windows (RViz, the MuJoCo viewer), once per login: `xhost +SI:localuser:root`.
+
+- **ROS 2 traffic stays on this PC.** The container shares your network, so `compose.linux.yaml` sets
+  `ROS_DOMAIN_ID=42` and local-only discovery: other robots and computers on the network can't reach it, and
+  it can't drive them. [ros2_ws/src/teleop/README.md](ros2_ws/src/teleop/README.md) shows how to reach a real robot.
+- **Small root partition?** The image needs about 25 GB, kept in `/var/lib/docker` and, from Docker 29, in
+  `/var/lib/containerd`. To keep it elsewhere, put this in `/etc/docker/daemon.json` (merged with what the NVIDIA
+  toolkit wrote there), then `sudo systemctl restart docker`:
+  ```json
+  { "data-root": "/home/docker-data", "features": { "containerd-snapshotter": false } }
+  ```
+
 ## Ubuntu 24.04
 
 With [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html) (`ros-jazzy-desktop`) installed:

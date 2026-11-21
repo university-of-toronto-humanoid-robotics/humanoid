@@ -52,9 +52,12 @@ def setup(context):
 
     sim = arg('sim').lower() == 'true'
     policy_type, checkpoint, scan = arg('policy_type'), arg('checkpoint'), arg('scan')
+    allow_reset = False   # walk_controller's ~/reset: only for sim testing, never on the robot
     if sim:
         # The scenario names the policy that suits its terrain; the arguments override it.
-        policy = load_scenario(arg('scenario'))['policy']
+        scenario = load_scenario(arg('scenario'))
+        policy = scenario['policy']
+        allow_reset = scenario.get('on_fall', 'end') == 'respawn'
         policy_type = policy_type or policy['type']
         checkpoint = checkpoint or in_repo(policy['checkpoint'])
         scan = scan or policy.get('scan', 'elevation_map')
@@ -71,7 +74,6 @@ def setup(context):
     # Localization: on course scenes in the sim, from the spawn; on the robot, when initial_pose is given.
     localize, initial = arg('localize').lower(), arg('initial_pose')
     if sim:
-        scenario = load_scenario(arg('scenario'))
         spawn = scenario.get('spawn', {})
         on_course = 'course' in Path(scenario['scene']).stem
         initial = initial or f"{spawn.get('x', 0.0)}, {spawn.get('y', 0.0)}, {math.degrees(spawn.get('yaw', 0.0))}"
@@ -111,6 +113,13 @@ def setup(context):
             parameters=[{'scenario': arg('scenario'), 'viewer': arg('viewer').lower() == 'true',
                          'hold': float(arg('hold'))}],
             on_exit=Shutdown(reason='the scenario ended'),
+        ), Node(
+            # The head camera's compressed (JPEG) stream for the operator, as the RealSense driver adds on the robot.
+            package='image_transport',
+            executable='republish',
+            parameters=[{'in_transport': 'raw', 'out_transport': 'compressed'}],
+            remappings=[('in', '/g1/head_camera/color/image_raw'),
+                        ('out/compressed', '/g1/head_camera/color/image_raw/compressed')],
         )]
     else:
         hardware = [IncludeLaunchDescription(PythonLaunchDescriptionSource(os.path.join(
@@ -129,8 +138,10 @@ def setup(context):
             executable='walk_controller',
             output='screen',
             parameters=[time, {'policy_type': policy_type, 'checkpoint': checkpoint,
-                               'scan_topic': SCAN_TOPICS[scan]}],
+                               'scan_topic': SCAN_TOPICS[scan], 'allow_reset': allow_reset}],
         ),
+        # The operator's status line (ros2_ws/src/teleop): tilt and measured speed, from /lowstate and FAST-LIO.
+        Node(package='teleop', executable='robot_status', parameters=[time]),
     ] + course_nodes
 
 

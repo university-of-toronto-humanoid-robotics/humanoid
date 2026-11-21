@@ -1,0 +1,41 @@
+name: humanoid
+# Ubuntu host (any version) with an NVIDIA GPU. Needs Docker Engine and the
+# NVIDIA Container Toolkit; see the README's "Ubuntu (Docker)" section.
+# Before starting, allow the container to open windows: xhost +local:root
+services:
+  dev:
+    build: .
+    image: humanoid-dev
+    gpus: all
+    # Host networking: ROS 2 traffic reaches native ROS on the host and other
+    # machines, and viser (8080) / TensorBoard (6006) need no port mapping.
+    network_mode: host
+    ipc: host # ROS 2 shared-memory transport between container and host
+    volumes:
+      - ..:/workspaces/humanoid
+      - /tmp/.X11-unix:/tmp/.X11-unix # GUI windows (rqt_image_view, RViz)
+      - /dev/input:/dev/input # game controllers (joy's game_controller_node)
+      - /run/udev:/run/udev:ro # lets SDL notice a controller plugged in later
+      - cache:/root/.cache # compiled GPU kernels (warp), pip, etc.
+      - demo-cache:/tmp/mjlab_cache # mjlab demo's downloaded policy + motion
+    device_cgroup_rules:
+      - "c 13:* rmw" # input devices (/dev/input/js*, event*)
+    environment:
+      # Host networking puts the container on your LAN's ROS 2 network. Keep it to
+      # this PC and off other robots' domain, or another machine's /cmd_vel could
+      # drive the sim (and ours could drive their robots). Override to talk to a real G1.
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID_HUMANOID:-42}
+      ROS_AUTOMATIC_DISCOVERY_RANGE: ${ROS_DISCOVERY_RANGE:-LOCALHOST}
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+      MUJOCO_GL: egl # MuJoCo's offscreen rendering (the sim's head camera) on the GPU, no window needed
+      # Number GPUs as nvidia-smi does, so CUDA_VISIBLE_DEVICES=1 means nvidia-smi's GPU 1.
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      PYTHONPATH: /workspaces/humanoid/training/unitree_rl_mjlab # lets Unitree's scripts import their tasks
+    working_dir: /workspaces/humanoid
+    stdin_open: true
+    tty: true
+
+volumes:
+  cache:
+  demo-cache:
