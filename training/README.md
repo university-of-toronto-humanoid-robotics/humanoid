@@ -35,7 +35,7 @@ The four RPL tasks also have two separate foot safety penalties. `penalty_stumbl
 returns 1 for a control step when either foot's world-frame net terrain contact
 force has `F_xy > stumble_ratio * |F_z|` and total force is at least 5 N. It
 includes ground, steps, sills, beams, and walls, but excludes robot self-contact.
-The default ratio is 4.0 and the reward weight is −2.0. The 0.5 ratio used by
+The default ratio is 4.0 and the reward weight is −10.0. The 0.5 ratio used by
 RPL is available for comparison; ordinary horizontal traction can trigger it.
 `penalty_foothold` tests 50 points per sole with vertical ground-truth rays.
 For each contacting foot (`F_z > 1 N`), a point more than 5 cm above terrain

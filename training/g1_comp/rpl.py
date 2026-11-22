@@ -34,7 +34,7 @@ def rpl_env_cfg(
   *,
   stumble_enabled: bool = True,
   stumble_ratio: float = 4.0,
-  stumble_weight: float = -2.0,
+  stumble_weight: float = -10.0,
   min_contact_force: float = 5.0,
   foothold_enabled: bool = True,
   foothold_epsilon: float = 0.05,
