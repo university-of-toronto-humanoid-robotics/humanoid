@@ -138,6 +138,9 @@ class _Tile:
 
   def __init__(self, spec: mujoco.MjSpec, yc: float, w: float, beam_group: int = 0):
     self.spec, self.body = spec, spec.body("terrain")
+    # Keep wall geoms in a named subtree so a contact sensor can distinguish
+    # them from the floor, stairs, ramps, and step-over beams.
+    self.wall_body = spec.body("lane_walls") or self.body.add_body(name="lane_walls")
     self.yc, self.w = yc, w
     self.beam_group = beam_group
     self.geoms: list[TerrainGeometry] = []
@@ -148,7 +151,7 @@ class _Tile:
     return self.yc - self.w / 2 - 0.05, self.yc + self.w / 2 + 0.05
 
   def box(self, kind: str, x0: float, x1: float, y0: float, y1: float, top: float, shade: float = 1.0) -> None:
-    geom = self.body.add_geom(
+    geom = (self.wall_body if kind == "wall" else self.body).add_geom(
       type=mujoco.mjtGeom.mjGEOM_BOX,
       size=((x1 - x0) / 2, (y1 - y0) / 2, (top - _BOTTOM) / 2),
       pos=((x0 + x1) / 2, (y0 + y1) / 2, (top + _BOTTOM) / 2),
@@ -158,7 +161,7 @@ class _Tile:
   def panel(self, a: tuple[float, float], b: tuple[float, float], top: float) -> None:
     """A thin, upright collision panel, like the course's swung-open door leaf."""
     yaw = math.atan2(b[1] - a[1], b[0] - a[0])
-    geom = self.body.add_geom(
+    geom = self.wall_body.add_geom(
       type=mujoco.mjtGeom.mjGEOM_BOX,
       size=(math.dist(a, b) / 2, MAZE_LEAF_THICKNESS / 2, (top - _BOTTOM) / 2),
       pos=((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (top + _BOTTOM) / 2),

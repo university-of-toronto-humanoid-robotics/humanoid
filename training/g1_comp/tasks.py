@@ -45,6 +45,7 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.terrains import TerrainGeneratorCfg
 from src.assets.robots.unitree_g1.g1_constants import FULL_COLLISION
@@ -85,6 +86,7 @@ LANE_SPEEDS = dict(lin_vel_x=(-0.2, 0.8), lin_vel_y=(-0.3, 0.3), ang_vel_z=(-1.0
 LANE_SHARE = 0.9  # lanes: share of robots told to walk along the lane (the rest: any heading)
 START_LEVEL = 1  # hardest terrain row a robot may start on (rows 0-9); they earn the rest
 OPEN_HEIGHTMAP_ARM_POSE_WEIGHT = -0.5  # keep shoulders and elbows near their default pose
+WALL_CONTACT_WEIGHT = -3.0  # discourage using a wall for support, without penalizing stairs or beams
 
 # --- Height map and rewards (as in the G1-Comp-* tasks; see training/README.md) ----
 # The height map reads terrain height relative to the feet (scan.py): 0 on flat
@@ -291,6 +293,21 @@ def _use_world(cfg: ManagerBasedRlEnvCfg, world: TerrainGeneratorCfg, play: bool
       cfg.viewer.distance = 3.0
   assert cfg.scene.terrain is not None
   cfg.scene.terrain.terrain_generator = world
+  if any(isinstance(t, (worlds.LaneTerrainCfg, worlds.RplLaneTerrainCfg, worlds.MazeTerrainCfg))
+         for t in world.sub_terrains.values()):
+    cfg.scene.sensors = (cfg.scene.sensors or ()) + (ContactSensorCfg(
+      name="wall_contact",
+      primary=ContactMatch(mode="subtree", pattern="pelvis", entity="robot"),
+      secondary=ContactMatch(mode="subtree", pattern="lane_walls"),
+      fields=("found", "force"),
+      reduce="maxforce",
+      history_length=4,
+    ),)
+    cfg.rewards["wall_contact"] = RewardTermCfg(
+      func=mdp.wall_contact_penalty,
+      weight=WALL_CONTACT_WEIGHT,
+      params={"sensor_name": "wall_contact", "force_threshold": 10.0},
+    )
   cfg.scene.terrain.max_init_terrain_level = START_LEVEL
   if not play and (selected := os.environ.get("G1_TRAIN_START_LEVEL")) is not None:
     level = int(selected)

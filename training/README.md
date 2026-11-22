@@ -26,6 +26,10 @@ including its beam-clearance and arm-posture terms. The existing height-map
 scan noise is retained during training, matching `G1-Flat-HeightMap`.
 Training uses a grid of independent tiles, one feature per robot. Playback shows
 only one tile, so an ascending stair does not lead into a second tile's lower floor.
+The generated walled lanes, including all four RPL tasks, penalize robot contact
+with corridor walls and doorway panels (reward weight −3). The contact sensor
+excludes floors, stair treads, ramps, sills, and step-over beams. Existing
+checkpoints keep the same observation and action layout.
 
 From `training/` on your Mac, inspect any of them at level 0–9:
 

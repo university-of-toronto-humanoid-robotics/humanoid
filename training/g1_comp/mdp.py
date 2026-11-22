@@ -34,6 +34,20 @@ def arm_pose_deviation(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> tor
   )
 
 
+def wall_contact_penalty(
+  env: ManagerBasedRlEnv, sensor_name: str, force_threshold: float = 10.0
+) -> torch.Tensor:
+  """Fraction of recent physics substeps with a robot-to-wall contact.
+
+  The sensor targets only lane walls, leaving intended stair, ramp, beam, and
+  floor contacts unpenalized. A small force threshold ignores incidental noise.
+  """
+  sensor: ContactSensor = env.scene[sensor_name]
+  assert sensor.data.force_history is not None
+  force = torch.linalg.vector_norm(sensor.data.force_history, dim=-1)
+  return (force > force_threshold).any(dim=1).float().mean(dim=1)
+
+
 def foot_clearance(env: ManagerBasedRlEnv, sensor_names: tuple[str, ...]) -> torch.Tensor:
   """Height of each foot above the highest ground point under its sole. [B, F]
 
