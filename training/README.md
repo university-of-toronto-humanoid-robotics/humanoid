@@ -72,6 +72,51 @@ and the fraction of steps below 0.05 m/s. Use `--task RPL-Descend-Stairs` for
 descent and `--stumble-ratio 0.5` to compare thresholds under the same test.
 An omitted candidate measures just the baseline.
 
+### CNN ascending-stair expert
+
+`RPL-CNN-Ascend-Stairs` reuses the `RPL-Ascend-Stairs` world, command
+distribution, terrain curriculum, 29 joint actions, and 791/806 actor/critic
+observation layouts. Its actor encodes the last 693 actor values (the 33 × 21
+height map) with two 16-channel 4 × 4 stride-2 convolutions, projects the
+640 features to 128, concatenates the other 98 inputs, then applies an
+ELU MLP with layers 512, 256, 256, 128. The critic stays an MLP. The
+checkpoint and exported ONNX policy therefore require this task's CNN actor;
+an MLP stair checkpoint cannot be used with `--from`.
+
+The separate reward configuration in `g1_comp/rpl_cnn.py` starts from the
+[RPL stair expert weights](https://github.com/amazon-far/RPL/blob/main/rpl_training/config_values/reward.py)
+and [reward definitions](https://github.com/amazon-far/RPL/blob/main/rpl_training/terms/reward.py).
+It includes velocity tracking, foot contact and support, stability, effort,
+posture, and failure penalties. The stumble weight is −50 with an explicit
+0.5 horizontal-to-vertical force ratio and a 5 N noise cutoff. This is much
+stronger than the existing RPL task's −10/4.0 setting; check stair approach
+behavior before a large run. The contact-pattern penalty is present with zero
+weight until double-support statistics justify enabling it. The tagged effort,
+foot, and neutral-arm penalties start at 0.1 scale and change with mean episode
+length using [RPL's expert curriculum](https://github.com/amazon-far/RPL/blob/main/rpl_training/config_values/curriculum.py).
+Reward weights are multiplied once by mjlab's 0.02 s control step. The
+neutral-arm terms, 5 N stumble cutoff, ground-truth terrain-height convention,
+and absence of manipulation references are intentional adaptations; the
+task is not an exact RPL reproduction. Existing scan noise remains in the actor
+observation, while foothold reward uses ground-truth rays. `Episode_Reward/*`
+logs weighted contributions; `Episode_Metrics/raw_*` logs unweighted values,
+along with contact/sliding, velocity error, air time, and `penalty_scale`.
+Terrain level, termination reasons, and traversal success use existing logs.
+Stumble is a horizontal-force proxy for riser impacts, not a riser-only contact
+counter. This ascent-only task has no descent success metric.
+
+From `training/`, inspect the untrained task on a Mac with:
+
+```bash
+python scripts/play.py RPL-CNN-Ascend-Stairs --terrain-level 9 \
+  --viewer viser --device cpu --num-envs 1 --agent zero
+```
+
+Select `RPL-CNN-Ascend-Stairs` in the GitHub-source Colab notebook to train
+from scratch; the notebook discovers registered tasks from the selected branch.
+Run a small GPU smoke test before increasing parallel environments because
+the per-foot contact and ground-truth sole-ray rewards add cost.
+
 From `training/` on your Mac, inspect any of them at level 0–9:
 
 ```bash

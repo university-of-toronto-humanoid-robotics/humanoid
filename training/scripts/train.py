@@ -43,6 +43,7 @@ import src.tasks  # noqa: F401  (registers Unitree's tasks)
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg
 from g1_comp.tasks import TASKS
 from g1_comp.rpl import RPL_TASKS
+from g1_comp.rpl_cnn import TASK as RPL_CNN_ASCEND_TASK
 
 if start_terrain_level is not None and "start_terrain_level" not in load_env_cfg(sys.argv[1]).events:
   raise SystemExit("--start-terrain-level is supported for the Open height-map and lane tasks")
@@ -81,7 +82,7 @@ def use_from_option(argv: list[str]) -> list[str]:
   dest = Path("logs") / "rsl_rl" / experiment / run
   dest.mkdir(parents=True, exist_ok=True)
   shutil.copy2(source, dest / source.name)
-  if task in TASKS or task in RPL_TASKS or task.startswith("G1-Comp-"):
+  if task in TASKS or task in RPL_TASKS or task == RPL_CNN_ASCEND_TASK or task.startswith("G1-Comp-"):
     shorten_normalizer_memory(dest / source.name)
   print(f"[INFO] Continuing from {source} (copied to {dest})")
   return args + ["--agent.resume", "True", "--agent.load-run", run, "--agent.load-checkpoint", source.name]
