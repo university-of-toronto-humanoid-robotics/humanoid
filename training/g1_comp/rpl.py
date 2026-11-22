@@ -8,12 +8,15 @@ from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as envs_mdp
 from mjlab.managers.curriculum_manager import CurriculumTermCfg
 from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.metrics_manager import MetricsTermCfg
+from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 
-from . import lanes, worlds
+from . import lanes, mdp, worlds
 from .env_cfgs import g1_rough_heightmap_env_cfg, g1_rough_heightmap_ppo_runner_cfg
+from .sensors import FOOT_ENV_CONTACT_NAME, SOLE_SENSOR_NAMES, rpl_foot_safety_sensor_cfgs
 from .tasks import _use_lanes, _use_world, open_heightmap_env_cfg
 
 
@@ -25,7 +28,19 @@ RPL_TASKS = {
 }
 
 
-def rpl_env_cfg(feature: str, play: bool = False) -> ManagerBasedRlEnvCfg:
+def rpl_env_cfg(
+  feature: str,
+  play: bool = False,
+  *,
+  stumble_enabled: bool = True,
+  stumble_ratio: float = 4.0,
+  stumble_weight: float = -2.0,
+  min_contact_force: float = 5.0,
+  foothold_enabled: bool = True,
+  foothold_epsilon: float = 0.05,
+  foothold_contact_force: float = 1.0,
+  foothold_weight: float = -1.0,
+) -> ManagerBasedRlEnvCfg:
   """Specialize only the world and commands; retain the 791-input policy and rewards.
 
   Stairs and ramps inherit G1-Rough-HeightMap's rewards. Obstacles inherit
@@ -33,7 +48,40 @@ def rpl_env_cfg(feature: str, play: bool = False) -> ManagerBasedRlEnvCfg:
   """
   if feature not in RPL_TASKS.values():
     raise ValueError(f"Unknown RPL feature: {feature}")
+  if stumble_weight > 0 or foothold_weight > 0:
+    raise ValueError("Safety penalties need nonpositive reward weights")
   cfg = open_heightmap_env_cfg(play=play) if feature == "obstacles" else g1_rough_heightmap_env_cfg(play=play)
+
+  if stumble_enabled or foothold_enabled:
+    safety_sensors = rpl_foot_safety_sensor_cfgs()
+    cfg.scene.sensors = (cfg.scene.sensors or ()) + (
+      safety_sensors if foothold_enabled else safety_sensors[:1]
+    )
+  cfg.metrics = dict(cfg.metrics or {})
+  if stumble_enabled:
+    stumble_params = {
+      "sensor_name": FOOT_ENV_CONTACT_NAME,
+      "stumble_ratio": stumble_ratio,
+      "min_contact_force": min_contact_force,
+    }
+    cfg.rewards["penalty_stumble"] = RewardTermCfg(
+      func=mdp.penalty_stumble, weight=stumble_weight, params=stumble_params
+    )
+    cfg.metrics["stumble_rate"] = MetricsTermCfg(func=mdp.RplStumbleRate, params=stumble_params)
+  if foothold_enabled:
+    foothold_params = {
+      "contact_sensor_name": FOOT_ENV_CONTACT_NAME,
+      "sole_sensor_names": SOLE_SENSOR_NAMES,
+      "foothold_epsilon": foothold_epsilon,
+      "contact_force_threshold": foothold_contact_force,
+    }
+    cfg.rewards["penalty_foothold"] = RewardTermCfg(
+      func=mdp.penalty_foothold, weight=foothold_weight, params=foothold_params
+    )
+    cfg.metrics["unsupported_sole_samples"] = MetricsTermCfg(
+      func=mdp.unsupported_sole_samples, params=foothold_params
+    )
+  cfg.metrics["traversal_success"] = MetricsTermCfg(func=mdp.rpl_traversal_success)
 
   old = cfg.commands["twist"]
   assert isinstance(old, UniformVelocityCommandCfg)

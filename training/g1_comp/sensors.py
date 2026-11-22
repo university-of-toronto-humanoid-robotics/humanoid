@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mjlab.sensor import GridPatternCfg, ObjRef, RayCastSensorCfg
+import torch
+import warp as wp
+
+from mjlab.sensor import ContactMatch, ContactSensorCfg, GridPatternCfg, ObjRef, RayCastSensor, RayCastSensorCfg
 
 SCAN_SIZE = (1.6, 1.0)  # m, length (along the heading) x width
 SCAN_RESOLUTION = 0.05  # m -> 33 x 21 = 693 points
@@ -23,6 +26,8 @@ SCAN_LIFT = 2.0  # m; rays start this far above the pelvis
 TERRAIN_GROUPS = (0,)  # terrain geoms; robot visuals are group 2, robot collisions group 3
 FOOT_SENSOR_NAMES = ("left_foot_ground", "right_foot_ground")
 BEAM_SENSOR_NAMES = ("left_foot_beam", "right_foot_beam")
+SOLE_SENSOR_NAMES = ("left_sole_support", "right_sole_support")
+FOOT_ENV_CONTACT_NAME = "feet_environment_contact"
 FOOT_PATCH_SIZE = (0.2, 0.08)  # m, along x across; covers the sole (foot site is at its center)
 FOOT_PATCH_RESOLUTION = 0.04  # m -> 6 x 3 rays
 
@@ -98,3 +103,74 @@ def foot_beam_sensor_cfgs() -> tuple[RayCastSensorCfg, ...]:
     )
     for side, name in zip(("left", "right"), BEAM_SENSOR_NAMES, strict=True)
   )
+
+
+@dataclass
+class SoleGridPatternCfg(GridPatternCfg):
+  """Exactly 10 longitudinal by 5 lateral samples inside the G1 sole capsules."""
+
+  length: float = 0.18
+  width: float = 0.064
+  lift: float = 0.45
+
+  def generate_rays(self, mj_model, device):
+    del mj_model
+    x = torch.linspace(-self.length / 2, self.length / 2, 10, device=device)
+    y = torch.linspace(-self.width / 2, self.width / 2, 5, device=device)
+    xx, yy = torch.meshgrid(x, y, indexing="ij")
+    offsets = torch.stack((xx.flatten(), yy.flatten(), torch.full_like(xx.flatten(), self.lift)), dim=-1)
+    directions = torch.zeros_like(offsets)
+    directions[:, 2] = -1.0
+    return offsets, directions
+
+
+class SoleRayCastSensor(RayCastSensor):
+  """Follow the full sole pose for sample positions, but cast vertically in world."""
+
+  sole_points_w: torch.Tensor | None = None
+
+  def prepare_rays(self) -> None:
+    super().prepare_rays()
+    assert self._cached_world_rays is not None
+    assert self._cached_world_origins is not None
+    assert self._cached_frame_mat is not None
+    assert self._ray_vec is not None
+    pattern = self.cfg.pattern
+    assert isinstance(pattern, SoleGridPatternCfg)
+    world_down = torch.zeros_like(self._cached_world_rays)
+    world_down[..., 2] = -1.0
+    wp.to_torch(self._ray_vec).view_as(world_down).copy_(world_down)
+    self._cached_world_rays = world_down
+    self.sole_points_w = self._cached_world_origins - self._cached_frame_mat[:, :, 2].unsqueeze(1) * pattern.lift
+
+
+@dataclass
+class SoleRayCastSensorCfg(RayCastSensorCfg):
+  def build(self) -> SoleRayCastSensor:
+    return SoleRayCastSensor(self)
+
+
+def rpl_foot_safety_sensor_cfgs() -> tuple[ContactSensorCfg | SoleRayCastSensorCfg, ...]:
+  """One world-frame net force per foot, plus ground-truth 50-point sole rays."""
+  contacts = ContactSensorCfg(
+    name=FOOT_ENV_CONTACT_NAME,
+    primary=ContactMatch(
+      mode="subtree", pattern=r"^(left_ankle_roll_link|right_ankle_roll_link)$", entity="robot"
+    ),
+    secondary=ContactMatch(mode="subtree", pattern="terrain"),
+    fields=("found", "force"), reduce="netforce", num_slots=1,
+  )
+  rays = tuple(
+    SoleRayCastSensorCfg(
+      name=name,
+      frame=ObjRef(type="site", name=f"{side}_foot", entity="robot"),
+      ray_alignment="base",
+      pattern=SoleGridPatternCfg(),
+      max_distance=3.0,
+      exclude_parent_body=True,
+      include_geom_groups=(0, 1),
+      debug_vis=False,
+    )
+    for side, name in zip(("left", "right"), SOLE_SENSOR_NAMES, strict=True)
+  )
+  return (contacts, *rays)

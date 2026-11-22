@@ -13,7 +13,7 @@ Two Colab notebooks serve different policy families:
 - [colab/train_g1.ipynb](colab/train_g1.ipynb) trains the new `Flat`, `Open`,
   `Competition`, and related tasks. Keep checkpoints within the same task family.
 
-### RPL terrain experts (visualization stage)
+### RPL terrain experts
 
 `RPL-Ascend-Stairs`, `RPL-Descend-Stairs`, `RPL-Ramps`, and `RPL-Obstacles`
 use the same 791 actor inputs, 806 critic inputs, 29 joint actions, and MLP
@@ -30,6 +30,47 @@ The generated walled lanes, including all four RPL tasks, penalize robot contact
 with corridor walls and doorway panels (reward weight −3). The contact sensor
 excludes floors, stair treads, ramps, sills, and step-over beams. Existing
 checkpoints keep the same observation and action layout.
+
+The four RPL tasks also have two separate foot safety penalties. `penalty_stumble`
+returns 1 for a control step when either foot's world-frame net terrain contact
+force has `F_xy > stumble_ratio * |F_z|` and total force is at least 5 N. It
+includes ground, steps, sills, beams, and walls, but excludes robot self-contact.
+The default ratio is 4.0 and the reward weight is −2.0. The 0.5 ratio used by
+RPL is available for comparison; ordinary horizontal traction can trigger it.
+`penalty_foothold` tests 50 points per sole with vertical ground-truth rays.
+For each contacting foot (`F_z > 1 N`), a point more than 5 cm above terrain
+is unsupported. The total across both feet is divided by 50, so its unweighted
+value ranges from 0 to 2. Its default weight is −1.0. The settings live in
+`g1_comp/rpl.py` as `stumble_enabled`, `stumble_ratio`, `stumble_weight`,
+`min_contact_force`, `foothold_enabled`, `foothold_epsilon`,
+`foothold_contact_force`, and `foothold_weight`. Reward and metric names are
+`Episode_Reward/penalty_stumble`, `Episode_Reward/penalty_foothold`,
+`Episode_Metrics/stumble_rate`, `Episode_Metrics/stumble_positive_steps`,
+`Episode_Metrics/unsupported_sole_samples`, and
+`Episode_Metrics/traversal_success`. Reward weights are multiplied by the 0.02 s
+RL step, so do not transfer RPL's −50 directly. The 100 extra sole rays per
+robot may increase training cost; check throughput and memory on a small GPU
+run before scaling up.
+The force ratio and sole test follow the
+[RPL reward wrapper](https://github.com/amazon-far/RPL/blob/main/rpl_training/terms/reward.py)
+and [Holosoma locomotion terms](https://github.com/amazon-far/holosoma/blob/main/src/holosoma/holosoma/managers/reward/terms/locomotion.py),
+with explicitly configurable thresholds and weights.
+
+To compare a baseline and a newly trained stair policy on identical level,
+terrain seed, and forward command, run from `training/`:
+
+```bash
+python scripts/eval_rpl_safety.py \
+  --task RPL-Ascend-Stairs --terrain-level 9 --seeds 42 43 44 \
+  --baseline models/RPL/ascend/model_2498.pt \
+  --candidate path/to/new_model.pt
+```
+
+The script writes a JSON report under `logs/rpl_safety_eval/` with success,
+falls, stumble-positive steps, unsupported sole samples, mean forward speed,
+and the fraction of steps below 0.05 m/s. Use `--task RPL-Descend-Stairs` for
+descent and `--stumble-ratio 0.5` to compare thresholds under the same test.
+An omitted candidate measures just the baseline.
 
 From `training/` on your Mac, inspect any of them at level 0–9:
 

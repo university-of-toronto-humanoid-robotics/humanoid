@@ -48,6 +48,117 @@ def wall_contact_penalty(
   return (force > force_threshold).any(dim=1).float().mean(dim=1)
 
 
+def stumble_from_forces(
+  forces_w: torch.Tensor, stumble_ratio: float, min_contact_force: float
+) -> torch.Tensor:
+  """Binary per-world stumble from world-frame left/right foot net forces."""
+  if stumble_ratio < 0 or min_contact_force < 0:
+    raise ValueError("Stumble thresholds must be nonnegative")
+  horizontal = torch.linalg.vector_norm(forces_w[..., :2], dim=-1)
+  vertical = forces_w[..., 2].abs()
+  strong = torch.linalg.vector_norm(forces_w, dim=-1) >= min_contact_force
+  return ((horizontal > stumble_ratio * vertical) & strong).any(dim=1).float()
+
+
+def penalty_stumble(
+  env: ManagerBasedRlEnv, sensor_name: str, stumble_ratio: float, min_contact_force: float
+) -> torch.Tensor:
+  """Penalize a lateral foot impact against any terrain geom, once per RL step."""
+  sensor: ContactSensor = env.scene[sensor_name]
+  assert sensor.data.force is not None
+  # MuJoCo's primary-to-secondary net force points from the foot into terrain.
+  return stumble_from_forces(-sensor.data.force, stumble_ratio, min_contact_force)
+
+
+def foothold_from_samples(
+  forces_w: torch.Tensor,
+  sample_z: torch.Tensor,
+  terrain_z: torch.Tensor,
+  foothold_epsilon: float,
+  contact_force_threshold: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+  """Return (unsupported/50, unsupported sample count) for contacting feet."""
+  if foothold_epsilon < 0 or contact_force_threshold < 0:
+    raise ValueError("Foothold thresholds must be nonnegative")
+  assert sample_z.shape == terrain_z.shape and sample_z.shape[1:] == (2, 50)
+  in_contact = forces_w[..., 2] > contact_force_threshold
+  unsupported = (~torch.isfinite(terrain_z)) | ((sample_z - terrain_z) > foothold_epsilon)
+  count = (unsupported & in_contact.unsqueeze(-1)).sum(dim=(1, 2)).float()
+  return count / 50.0, count
+
+
+def rpl_foothold_values(
+  env: ManagerBasedRlEnv,
+  contact_sensor_name: str,
+  sole_sensor_names: tuple[str, str],
+  foothold_epsilon: float,
+  contact_force_threshold: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+  contact: ContactSensor = env.scene[contact_sensor_name]
+  assert contact.data.force is not None
+  sole_z, ground_z = [], []
+  for name in sole_sensor_names:
+    sensor: RayCastSensor = env.scene[name]
+    assert sensor.sole_points_w is not None
+    sole_z.append(sensor.sole_points_w[..., 2])
+    ground_z.append(torch.where(sensor.data.distances >= 0, sensor.data.hit_pos_w[..., 2], -torch.inf))
+  return foothold_from_samples(
+    -contact.data.force, torch.stack(sole_z, dim=1), torch.stack(ground_z, dim=1),
+    foothold_epsilon, contact_force_threshold,
+  )
+
+
+def penalty_foothold(
+  env: ManagerBasedRlEnv,
+  contact_sensor_name: str,
+  sole_sensor_names: tuple[str, str],
+  foothold_epsilon: float,
+  contact_force_threshold: float,
+) -> torch.Tensor:
+  return rpl_foothold_values(
+    env, contact_sensor_name, sole_sensor_names, foothold_epsilon, contact_force_threshold
+  )[0]
+
+
+def unsupported_sole_samples(
+  env: ManagerBasedRlEnv,
+  contact_sensor_name: str,
+  sole_sensor_names: tuple[str, str],
+  foothold_epsilon: float,
+  contact_force_threshold: float,
+) -> torch.Tensor:
+  return rpl_foothold_values(
+    env, contact_sensor_name, sole_sensor_names, foothold_epsilon, contact_force_threshold
+  )[1]
+
+
+class RplStumbleRate:
+  """Log step rate automatically and the absolute per-episode stumble count."""
+
+  def __init__(self, cfg, env: ManagerBasedRlEnv):
+    del cfg
+    self.env = env
+    self.count = torch.zeros(env.num_envs, device=env.device)
+
+  def __call__(self, env, sensor_name: str, stumble_ratio: float, min_contact_force: float):
+    value = penalty_stumble(env, sensor_name, stumble_ratio, min_contact_force)
+    self.count += value
+    return value
+
+  def reset(self, env_ids=None):
+    if env_ids is None:
+      env_ids = slice(None)
+    self.env.extras["log"]["Episode_Metrics/stumble_positive_steps"] = self.count[env_ids].mean()
+    self.count[env_ids] = 0.0
+
+
+def rpl_traversal_success(env: ManagerBasedRlEnv, goal_distance: float = 5.6) -> torch.Tensor:
+  """Success at the terminal step, scaled to produce an episode 0/1 average."""
+  from .lanes import rpl_feature_complete
+
+  return rpl_feature_complete(env, goal_distance).float() * env.episode_length_buf.float()
+
+
 def foot_clearance(env: ManagerBasedRlEnv, sensor_names: tuple[str, ...]) -> torch.Tensor:
   """Height of each foot above the highest ground point under its sole. [B, F]
 
