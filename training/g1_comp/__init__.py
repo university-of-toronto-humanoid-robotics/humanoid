@@ -2,6 +2,7 @@
 
 Importing this package registers:
   G1-Flat-HeightMap  original flat walking with a flattened height map
+  G1-CNN-Flat-HeightMap  the same flat task with a CNN height-map actor
   G1-Rough-HeightMap  compatible rough terrain for the flat checkpoint
   G1-Open-HeightMap   Open lanes with that same checkpoint layout
   G1-Open-Maze-HeightMap  winding lanes, ramps and beams with wall clearance
@@ -40,12 +41,21 @@ from .tasks import (TASKS, open_heightmap_env_cfg, open_heightmap_ppo_runner_cfg
                     open_maze_heightmap_env_cfg, open_maze_heightmap_ppo_runner_cfg, runner_cfg)
 from .rpl import RPL_TASKS, rpl_env_cfg, rpl_runner_cfg
 from .rpl_cnn import TASK as RPL_CNN_ASCEND_TASK, cnn_ascend_env_cfg, cnn_ascend_runner_cfg
+from .cnn_flat import TASK as CNN_FLAT_TASK, cnn_flat_runner_cfg
 
 register_mjlab_task(
   task_id="G1-Flat-HeightMap",
   env_cfg=g1_flat_heightmap_env_cfg(),
   play_env_cfg=g1_flat_heightmap_env_cfg(play=True),
   rl_cfg=g1_flat_heightmap_ppo_runner_cfg(),
+  runner_cls=VelocityOnPolicyRunner,
+)
+
+register_mjlab_task(
+  task_id=CNN_FLAT_TASK,
+  env_cfg=g1_flat_heightmap_env_cfg(),
+  play_env_cfg=g1_flat_heightmap_env_cfg(play=True),
+  rl_cfg=cnn_flat_runner_cfg(),
   runner_cls=VelocityOnPolicyRunner,
 )
 

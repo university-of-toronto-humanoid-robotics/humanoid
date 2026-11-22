@@ -74,6 +74,15 @@ An omitted candidate measures just the baseline.
 
 ### CNN ascending-stair expert
 
+`G1-CNN-Flat-HeightMap` is the flat walking starting task for this CNN actor.
+It uses `G1-Flat-HeightMap`'s exact environment configuration, including its
+rewards, commands, observations, noise, actions, and randomization. Only the
+actor architecture and experiment name differ. Its CNN actor and PPO/critic
+configuration match `RPL-CNN-Ascend-Stairs`, so a checkpoint trained on the
+flat task can initialize that stair task with `--from`. The flat task's
+checkpoints save under `logs/rsl_rl/g1_cnn_flat_heightmap/`. The old flat MLP
+checkpoint cannot initialize either CNN task.
+
 `RPL-CNN-Ascend-Stairs` reuses the `RPL-Ascend-Stairs` world, command
 distribution, terrain curriculum, 29 joint actions, and 791/806 actor/critic
 observation layouts. Its actor encodes the last 693 actor values (the 33 × 21

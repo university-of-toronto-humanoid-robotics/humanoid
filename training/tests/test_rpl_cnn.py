@@ -1,11 +1,13 @@
 """Shape, export, and reward-curriculum checks for the CNN stair task."""
 
 import unittest
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import _setup  # noqa: F401
 import torch
 from tensordict import TensorDict
+from mjlab.tasks.registry import load_env_cfg, load_rl_cfg
 
 from g1_comp.rpl_cnn import REWARD_SPEC, cnn_ascend_runner_cfg
 from g1_comp.rpl_cnn_actor import RplCnnActor
@@ -13,6 +15,21 @@ from g1_comp.rpl_cnn_reward import PenaltyCurriculum, neutral_arm_pose
 
 
 class RplCnnTests(unittest.TestCase):
+  def test_flat_cnn_reuses_flat_task_and_matches_stair_model(self):
+    flat = asdict(load_env_cfg("G1-Flat-HeightMap"))
+    cnn = asdict(load_env_cfg("G1-CNN-Flat-HeightMap"))
+    # Each fresh terrain cfg creates an equivalent but distinct default callback.
+    flat["scene"]["terrain"].pop("spec_fn")
+    cnn["scene"]["terrain"].pop("spec_fn")
+    self.assertEqual(flat, cnn)
+
+    flat_runner = load_rl_cfg("G1-CNN-Flat-HeightMap")
+    stair_runner = load_rl_cfg("RPL-CNN-Ascend-Stairs")
+    self.assertEqual(flat_runner.experiment_name, "g1_cnn_flat_heightmap")
+    self.assertEqual(asdict(flat_runner.actor), asdict(stair_runner.actor))
+    self.assertEqual(asdict(flat_runner.critic), asdict(stair_runner.critic))
+    self.assertEqual(asdict(flat_runner.algorithm), asdict(stair_runner.algorithm))
+
   def test_actor_shape_gradients_and_export(self):
     obs = TensorDict({"actor": torch.randn(2, 791)}, batch_size=[2])
     actor = RplCnnActor(obs, {"policy": ["actor"]}, "policy", 29,
