@@ -15,6 +15,7 @@ from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 
 from . import lanes, mdp, worlds
+from .sequential_tread import SequentialTreadReward
 from .env_cfgs import g1_rough_heightmap_env_cfg, g1_rough_heightmap_ppo_runner_cfg
 from .sensors import FOOT_ENV_CONTACT_NAME, SOLE_SENSOR_NAMES, rpl_foot_safety_sensor_cfgs
 from .tasks import _use_lanes, _use_world, open_heightmap_env_cfg
@@ -82,6 +83,14 @@ def rpl_env_cfg(
       func=mdp.unsupported_sole_samples, params=foothold_params
     )
   cfg.metrics["traversal_success"] = MetricsTermCfg(func=mdp.rpl_traversal_success)
+  if feature == "descend":
+    cfg.rewards["sequential_tread_contact"] = RewardTermCfg(
+      func=SequentialTreadReward,
+      weight=1.0,
+      params={"min_support_ratio": 0.50, "min_contact_duration": 0.10,
+              "contact_weight": 0.5, "completion_bonus": 0.5,
+              "alternation_factor": 0.5, "window_duration": 0.30},
+    )
 
   old = cfg.commands["twist"]
   assert isinstance(old, UniformVelocityCommandCfg)

@@ -65,6 +65,10 @@ if "G1_PLAY_TERRAIN_LEVEL" in os.environ:
   class _ResetOnPlayEnv(_mjlab_envs.ManagerBasedRlEnv):
     def __init__(self, *args, **kwargs):
       super().__init__(*args, **kwargs)
+      if "sequential_tread_contact" in self.reward_manager.active_terms:
+        self.manager_visualizers["sequential_tread"] = self.reward_manager.get_term_cfg(
+          "sequential_tread_contact"
+        ).func
       self.reset()
 
   _mjlab_envs.ManagerBasedRlEnv = _ResetOnPlayEnv

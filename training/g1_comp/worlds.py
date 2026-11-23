@@ -394,6 +394,8 @@ class RplLaneTerrainCfg(SubTerrainCfg):
   feature: str
   beam_group: int = 0
   size: tuple[float, float] = TILE_SIZE
+  # Filled in generator call order (column, then row), including its random difficulty jitter.
+  stair_specs: list[tuple[int, float, float, float]] = field(default_factory=list, init=False, repr=False)
 
   def __post_init__(self) -> None:
     if self.feature not in {"ascend", "descend", "ramps", "obstacles"}:
@@ -417,6 +419,8 @@ class RplLaneTerrainCfg(SubTerrainCfg):
       n = 2 + round((STAIR_RISERS - 2) * d)
       riser = _lerp(0.06, 0.225, d)  # row 9 always exceeds the course's 20.3 cm
       tread = _lerp(EASY_TREAD, STAIR_TREAD, d)
+      if self.feature == "descend":
+        self.stair_specs.append((n, riser, tread, lane_width))
       highest = n * riser
       x0 = 2.0
       if self.feature == "ascend":

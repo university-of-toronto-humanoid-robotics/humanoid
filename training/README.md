@@ -57,6 +57,20 @@ The force ratio and sole test follow the
 and [Holosoma locomotion terms](https://github.com/amazon-far/holosoma/blob/main/src/holosoma/holosoma/managers/reward/terms/locomotion.py),
 with explicitly configurable thresholds and weights.
 
+`RPL-Descend-Stairs` additionally rewards consecutive supported contacts on its
+descending treads and the bottom landing. A tread counts after at least 50% of
+the sole samples match its top surface and upward foot force persists for 0.10 s.
+Contact shaping ends after 0.30 s; each qualified tread pays a one-time 0.5
+bonus in the dt-scaled reward. A later landing can advance the target after
+sustained support, but skipped treads earn no credit. The policy observations,
+curriculum, and forward-traversal termination are unchanged. Inspect
+`Episode_Reward/sequential_tread_contact`, `Episode_Metrics/clean_descent`,
+`Episode_Metrics/tread_completion_rate`, and `Episode_Metrics/skipped_treads`
+in W&B. Clean descent requires credited contact on every tread before reaching
+the far landing. In fixed-level Viser playback, a green marker shows the
+current target tread. The existing contact sensor gives net force per foot;
+the sole position and terrain height identify the likely supporting tread.
+
 To compare a baseline and a newly trained stair policy on identical level,
 terrain seed, and forward command, run from `training/`:
 
