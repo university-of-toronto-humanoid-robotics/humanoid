@@ -35,12 +35,14 @@ The four RPL tasks also have two separate foot safety penalties. `penalty_stumbl
 returns 1 for a control step when either foot's world-frame net terrain contact
 force has `F_xy > stumble_ratio * |F_z|` and total force is at least 5 N. It
 includes ground, steps, sills, beams, and walls, but excludes robot self-contact.
-The default ratio is 4.0 and the reward weight is −10.0. The 0.5 ratio used by
+The default ratio is 4.0. The reward weight is −20.0 for `RPL-Ascend-Stairs`
+and −10.0 for the other three tasks. The 0.5 ratio used by
 RPL is available for comparison; ordinary horizontal traction can trigger it.
 `penalty_foothold` tests 50 points per sole with vertical ground-truth rays.
 For each contacting foot (`F_z > 1 N`), a point more than 5 cm above terrain
 is unsupported. The total across both feet is divided by 50, so its unweighted
-value ranges from 0 to 2. Its default weight is −1.0. The settings live in
+value ranges from 0 to 2. Its weight is −5.0 for `RPL-Ascend-Stairs` and −1.0
+for the other three tasks. The settings live in
 `g1_comp/rpl.py` as `stumble_enabled`, `stumble_ratio`, `stumble_weight`,
 `min_contact_force`, `foothold_enabled`, `foothold_epsilon`,
 `foothold_contact_force`, and `foothold_weight`. Reward and metric names are
@@ -98,7 +100,7 @@ and [reward definitions](https://github.com/amazon-far/RPL/blob/main/rpl_trainin
 It includes velocity tracking, foot contact and support, stability, effort,
 posture, and failure penalties. The stumble weight is −50 with an explicit
 0.5 horizontal-to-vertical force ratio and a 5 N noise cutoff. This is much
-stronger than the existing RPL task's −10/4.0 setting; check stair approach
+stronger than the existing RPL task's −20/4.0 setting; check stair approach
 behavior before a large run. The contact-pattern penalty is present with zero
 weight until double-support statistics justify enabling it. The tagged effort,
 foot, and neutral-arm penalties start at 0.1 scale and change with mean episode
