@@ -34,12 +34,12 @@ def rpl_env_cfg(
   *,
   stumble_enabled: bool = True,
   stumble_ratio: float = 4.0,
-  stumble_weight: float | None = None,
+  stumble_weight: float = -10.0,
   min_contact_force: float = 5.0,
   foothold_enabled: bool = True,
   foothold_epsilon: float = 0.05,
   foothold_contact_force: float = 1.0,
-  foothold_weight: float | None = None,
+  foothold_weight: float = -1.0,
 ) -> ManagerBasedRlEnvCfg:
   """Specialize only the world and commands; retain the 791-input policy and rewards.
 
@@ -48,10 +48,6 @@ def rpl_env_cfg(
   """
   if feature not in RPL_TASKS.values():
     raise ValueError(f"Unknown RPL feature: {feature}")
-  if stumble_weight is None:
-    stumble_weight = -20.0 if feature == "ascend" else -10.0
-  if foothold_weight is None:
-    foothold_weight = -5.0 if feature == "ascend" else -1.0
   if stumble_weight > 0 or foothold_weight > 0:
     raise ValueError("Safety penalties need nonpositive reward weights")
   cfg = open_heightmap_env_cfg(play=play) if feature == "obstacles" else g1_rough_heightmap_env_cfg(play=play)
