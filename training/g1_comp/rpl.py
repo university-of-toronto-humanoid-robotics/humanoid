@@ -10,6 +10,7 @@ from mjlab.managers.curriculum_manager import CurriculumTermCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
@@ -52,6 +53,14 @@ def rpl_env_cfg(
   if stumble_weight > 0 or foothold_weight > 0:
     raise ValueError("Safety penalties need nonpositive reward weights")
   cfg = open_heightmap_env_cfg(play=play) if feature == "obstacles" else g1_rough_heightmap_env_cfg(play=play)
+  if feature == "ramps":
+    cfg.rewards["arm_joint_velocity"] = RewardTermCfg(
+      func=envs_mdp.joint_vel_l2,
+      weight=-0.001,
+      params={"asset_cfg": SceneEntityCfg(
+        "robot", joint_names=r"^(left|right)_(shoulder|elbow|wrist).*"
+      )},
+    )
 
   if stumble_enabled or foothold_enabled:
     safety_sensors = rpl_foot_safety_sensor_cfgs()
