@@ -295,14 +295,15 @@ def _use_world(cfg: ManagerBasedRlEnvCfg, world: TerrainGeneratorCfg, play: bool
   cfg.scene.terrain.terrain_generator = world
   if any(isinstance(t, (worlds.LaneTerrainCfg, worlds.RplLaneTerrainCfg, worlds.MazeTerrainCfg))
          for t in world.sub_terrains.values()):
-    cfg.scene.sensors = (cfg.scene.sensors or ()) + (ContactSensorCfg(
-      name="wall_contact",
-      primary=ContactMatch(mode="subtree", pattern="pelvis", entity="robot"),
-      secondary=ContactMatch(mode="subtree", pattern="lane_walls"),
-      fields=("found", "force"),
-      reduce="maxforce",
-      history_length=4,
-    ),)
+    if not any(sensor.name == "wall_contact" for sensor in (cfg.scene.sensors or ())):
+      cfg.scene.sensors = (cfg.scene.sensors or ()) + (ContactSensorCfg(
+        name="wall_contact",
+        primary=ContactMatch(mode="subtree", pattern="pelvis", entity="robot"),
+        secondary=ContactMatch(mode="subtree", pattern="lane_walls"),
+        fields=("found", "force"),
+        reduce="maxforce",
+        history_length=4,
+      ),)
     cfg.rewards["wall_contact"] = RewardTermCfg(
       func=mdp.wall_contact_penalty,
       weight=WALL_CONTACT_WEIGHT,
