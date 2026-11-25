@@ -70,9 +70,11 @@ echo '[4/5] Installing pinned simulation and CUDA Python packages for ROS Python
   mujoco-lidar==0.3.5 warp-lang==1.12.0
 /usr/bin/python3 -m pip install --break-system-packages --no-cache-dir \
   --index-url https://download.pytorch.org/whl/cpu torch==2.14.1
+# Colab's /usr/local/cuda currently points to CUDA 13.0 headers. Use the
+# matching 12.9 NVRTC and runtime-wheel headers for this CuPy 12.x install.
 /usr/bin/python3 -m pip install --break-system-packages --no-cache-dir --no-deps \
-  cupy-cuda12x==13.6.0 nvidia-cuda-nvrtc-cu12==12.8.93 \
-  nvidia-cuda-runtime-cu12==12.8.90
+  cupy-cuda12x==13.6.0 nvidia-cuda-nvrtc-cu12==12.9.86 \
+  nvidia-cuda-runtime-cu12==12.9.79
 # CuPy's wheel imports fastrlock; --no-deps above intentionally skips it.
 /usr/bin/python3 -m pip install --break-system-packages --no-cache-dir 'fastrlock>=0.5'
 /usr/bin/python3 -m pip install --break-system-packages --no-cache-dir simple-parsing==0.1.9
@@ -91,10 +93,20 @@ set +u
 source install/setup.bash
 set -u
 export LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH:-}
+export CUDA_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime
+test -f "${CUDA_PATH}/include/cuda_fp8.hpp"
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 export ROS_DOMAIN_ID=42
 /usr/bin/python3 -c 'import rclpy, mujoco, mujoco_lidar, warp, cupy, cv2, scipy; print("ROS Python imports OK; CuPy devices:", cupy.cuda.runtime.getDeviceCount()); print("CuPy kernel OK:", cupy.arange(3).sum().item())'
+/usr/bin/python3 - <<'PY'
+import cupy as cp
+from cupyx.scipy import ndimage
+
+image = cp.zeros((8, 8), dtype=cp.float32)
+ndimage.uniform_filter(image, size=3).sum().item()
+print('CuPy ndimage filter compiled successfully.', flush=True)
+PY
 ros2 pkg prefix bringup
 echo 'Running the repository CuPy map-update smoke test.'
 /usr/bin/python3 - <<'PY'
