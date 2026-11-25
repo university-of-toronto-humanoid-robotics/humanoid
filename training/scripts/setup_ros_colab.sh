@@ -73,14 +73,60 @@ echo '[4/5] Installing pinned simulation and CUDA Python packages for ROS Python
 /usr/bin/python3 -m pip install --break-system-packages --no-cache-dir --no-deps \
   cupy-cuda12x==13.6.0 nvidia-cuda-nvrtc-cu12==12.8.93 \
   nvidia-cuda-runtime-cu12==12.8.90
+# CuPy's wheel imports fastrlock; --no-deps above intentionally skips it.
+/usr/bin/python3 -m pip install --break-system-packages --no-cache-dir 'fastrlock>=0.5'
 /usr/bin/python3 -m pip install --break-system-packages --no-cache-dir simple-parsing==0.1.9
 
 echo '[5/5] Building this repository ROS workspace.'
+# ROS's generated setup scripts read optional variables without guarding them.
+# Temporarily disable nounset while sourcing them.
+unset PYTHONPATH
+export PYTHONNOUSERSITE=1
+set +u
 source /opt/ros/jazzy/setup.bash
+set -u
 cd "${repo_dir}/ros2_ws"
 colcon build --symlink-install --parallel-workers 2 --cmake-args -DCMAKE_BUILD_TYPE=Release
+set +u
 source install/setup.bash
+set -u
 export LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.12/dist-packages/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH:-}
-/usr/bin/python3 -c 'import rclpy, mujoco, mujoco_lidar, warp, cupy, cv2, scipy; print("ROS Python imports OK; CuPy devices:", cupy.cuda.runtime.getDeviceCount())'
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+export ROS_DOMAIN_ID=42
+/usr/bin/python3 -c 'import rclpy, mujoco, mujoco_lidar, warp, cupy, cv2, scipy; print("ROS Python imports OK; CuPy devices:", cupy.cuda.runtime.getDeviceCount()); print("CuPy kernel OK:", cupy.arange(3).sum().item())'
 ros2 pkg prefix bringup
+echo 'Running the repository CuPy map-update smoke test.'
+/usr/bin/python3 - <<'PY'
+import runpy
+
+checks = runpy.run_path(
+  'src/perception/elevation_mapping_cupy/elevation_mapping_cupy/'
+  'elevation_mapping_cupy/tests/test_kernel_compile_smoke.py'
+)
+checks['test_cupy_cuda_is_available']()
+checks['test_kernels_compile_and_one_update_step_runs']()
+print('CuPy map update passed.', flush=True)
+PY
+echo 'Checking the ROS elevation mapper with the same parameter files as bringup.'
+/usr/bin/python3 - <<'PY'
+import os
+import rclpy
+from ament_index_python.packages import get_package_share_directory
+from elevation_mapping_cupy.elevation_mapping_node import ElevationMappingNode
+
+core = os.path.join(get_package_share_directory('elevation_mapping_cupy'),
+                    'config', 'core', 'core_param.yaml')
+g1 = os.path.join(get_package_share_directory('bringup'),
+                  'config', 'g1_elevation_mapping.yaml')
+rclpy.init(args=['--ros-args', '--params-file', core, '--params-file', g1])
+node = None
+try:
+  node = ElevationMappingNode()
+  print('ROS elevation mapper initialized successfully.', flush=True)
+finally:
+  if node is not None:
+    node.destroy_node()
+  rclpy.try_shutdown()
+PY
 echo 'ROS simulation setup is ready.'
