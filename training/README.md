@@ -15,6 +15,10 @@ Two Colab notebooks serve different policy families:
 
 ### RPL terrain experts
 
+The opt-in ROS-like elevation-map prototype for a future student is documented
+in [g1_comp/student_mapping/README.md](g1_comp/student_mapping/README.md). It
+has a CPU/GPU observation check; DAgger training is not part of this prototype.
+
 `RPL-Ascend-Stairs`, `RPL-Descend-Stairs`, `RPL-Ramps`, and `RPL-Obstacles`
 use the same 791 actor inputs, 806 critic inputs, 29 joint actions, and MLP
 as `G1-Flat-HeightMap`. Each is a one-way lane with a 10-row terrain curriculum;
