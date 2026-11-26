@@ -27,12 +27,13 @@ cd humanoid
 # 2. Python environment (once, ~10 min, on the login node). Ends with "SETUP OK".
 bash training/g1_host/cluster/setup.sh
 
-# 3. A one-hour test on one H100. The last line of host-smoke-<jobid>.out says
-#    "SMOKE PASS" or what failed; it also prints how many robots per GPU to use,
-#    and compiles the GPU kernels that the training jobs then reuse.
+# 3. (Probably skippable step) A ~10-minute test on one H100. The last line of
+#    host-smoke-<jobid>.out says "SMOKE PASS" or what failed. It also compiles the
+#    GPU kernels that the training jobs then reuse.
 sbatch --account=aip-<PI> training/g1_host/cluster/smoke.sbatch
 
-# 4. The training: 5 policies, 5 H100s at once, up to 24 h per job.
+# 4. The training: 3 policies, one after the other on a single H100, a few hours
+#    to ~15 h each (about 1 GPU-day in total, probably less).
 sbatch --account=aip-<PI> training/g1_host/cluster/train.sbatch
 #    Not finished after 24 h? Once those jobs have ended, submit the same line
 #    again: unfinished policies continue from their last checkpoint, finished
@@ -44,14 +45,15 @@ bash training/g1_host/cluster/collect.sh      # prints the scp command
 
 To skip typing the account: `export SBATCH_ACCOUNT=aip-<PI>` (e.g. in `~/.bashrc`).
 
-Later runs use the same `train.sbatch` with other policies, for example the two
-mixed-terrain ones:
+The 3 policies:
 
-```bash
-TASKS="HoST-Supine-Mixed HoST-Prone-Mixed" sbatch --account=aip-<PI> --array=0-1 training/g1_host/cluster/train.sbatch
-```
+| Policy | The robot starts... | Why |
+|---|---|---|
+| `HoST-Ground` | on its back on flat ground | checks our implementation against the paper (99.5% there) |
+| `HoST-Supine-Mixed` | on its back, a side, or sitting against a wall; on flat ground, platforms, walls, ramps, stairs | the one the robot uses when it lands on its back |
+| `HoST-Prone-Mixed` | face down or on a side; on flat ground, ramps, stairs | the one the robot uses when it lands face down |
 
-and, if the smoke job recommended more robots per GPU, `NUM_ENVS=8192` in front.
+With GPUs to spare, `--array=0-2` (in the sbatch line) runs all three at once.
 
 ## Checking on it
 
@@ -63,7 +65,8 @@ grep "Learning iteration" host-<jobid>_*.out | tail -5
 
 A healthy run: the `Curriculum/force_and_bound/pull_force` line falls from 200
 toward 0 and `beta` from 1.0 toward 0.25 as the robots learn to stand without help;
-`success_rate` rises toward 1. Each policy takes about 7,500-12,000 iterations.
+`success_rate` rises toward 1. Ground takes 12,000 iterations, the mixed ones
+20,000; the `ETA:` line (`grep ETA host-*.out | tail -1`) gives the time left.
 
 ## What each file does
 
@@ -71,8 +74,8 @@ toward 0 and `beta` from 1.0 toward 0.25 as the robots learn to stand without he
 |---|---|
 | `setup.sh` | Makes `$SCRATCH/venvs/mjlab` with pinned versions from PyPI (same as our Docker image) and checks the tasks load |
 | `env.sh` | Shared by the jobs: paths, `module load python`, the venv, kernel cache in `$SCRATCH` |
-| `smoke.sbatch` | 1 H100, 1 h: GPU/driver check, code checks, 20 training iterations, robots-per-GPU benchmark |
-| `train.sbatch` | Array job, 1 H100 per policy (`--gres=gpu:h100:1`, 6 CPUs, 64 GB, 24 h); resumes from the last checkpoint; evaluates when done |
+| `smoke.sbatch` | 1 H100, ~10 min (30 min limit): GPU/driver check, code checks, 5 training iterations |
+| `train.sbatch` | Array of 3 jobs, one at a time, 1 H100 each (`--gres=gpu:h100:1`, 6 CPUs, 64 GB, 24 h); resumes from the last checkpoint; evaluates when done |
 | `collect.sh` | One `.tar.gz` with the learning curves, last checkpoints, exported policies and evaluations |
 
 ## If something goes wrong
