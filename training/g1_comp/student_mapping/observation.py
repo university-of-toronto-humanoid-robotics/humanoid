@@ -32,6 +32,11 @@ class StudentMapCfg:
   sole_depth: float = 0.035
   inpaint_passes: int = 16
   probe_resolution: float = 0.10  # candidate hits over the entire 5 m map
+  observation_delay_s: float = 2.0  # delay before a new cell counts as observed
+  hit_keep_probability: float = 1.0  # effective map coverage after visibility filtering
+  height_bias_std_m: float = 0.065  # spatially correlated error on each map update
+  height_noise_std_m: float = 0.015  # independent error on retained height hits
+  pose_noise_xy_std_m: float = 0.020  # shared XY misregistration of one update
 
 
 def visibility(head: torch.Tensor, hits: torch.Tensor, hit_valid: torch.Tensor,
@@ -86,14 +91,25 @@ class StudentHeightMap:
     cfg: StudentMapCfg = cfg.params["map_cfg"]
     if cfg.cells * cfg.resolution != 5.0:
       raise ValueError("Student map must cover 5 m at the configured resolution")
+    if not 0 < cfg.hit_keep_probability <= 1:
+      raise ValueError("hit_keep_probability must be in (0, 1]")
+    if min(cfg.observation_delay_s, cfg.height_bias_std_m,
+           cfg.height_noise_std_m, cfg.pose_noise_xy_std_m) < 0:
+      raise ValueError("Map noise standard deviations must be nonnegative")
     self.cfg = cfg
     self.n = env.num_envs
     self.device = env.device
     self.height = torch.zeros((self.n, 1, cfg.cells, cfg.cells), device=env.device)
     self.valid = torch.zeros_like(self.height, dtype=torch.bool)
+    self.first_hit_time = torch.full_like(self.height, -1e6)
     self.filled_height = torch.zeros_like(self.height)
     self.fill_valid = torch.zeros_like(self.valid)
     self.center = torch.zeros((self.n, 2), device=env.device)
+    self.previous_height = torch.zeros_like(self.height)
+    self.previous_valid = torch.zeros_like(self.valid)
+    self.previous_filled_height = torch.zeros_like(self.filled_height)
+    self.previous_fill_valid = torch.zeros_like(self.fill_valid)
+    self.previous_center = torch.zeros_like(self.center)
     self.fresh = torch.ones(self.n, dtype=torch.bool, device=env.device)
     self.last_step = -1
     self.last_map_time = torch.full((self.n,), -1e6, device=env.device)
@@ -114,10 +130,15 @@ class StudentHeightMap:
     ids = slice(None) if env_ids is None else env_ids
     self.height[ids] = 0
     self.valid[ids] = False
+    self.first_hit_time[ids] = -1e6
     self.filled_height[ids] = 0
     self.fill_valid[ids] = False
     self.fresh[ids] = True
     self.last_map_time[ids] = -1e6
+    self.previous_height[ids] = 0
+    self.previous_valid[ids] = False
+    self.previous_filled_height[ids] = 0
+    self.previous_fill_valid[ids] = False
 
   def _sample(self, data: torch.Tensor, xy: torch.Tensor, center: torch.Tensor,
               mode: str = "nearest") -> torch.Tensor:
@@ -131,6 +152,11 @@ class StudentHeightMap:
     self.height = F.grid_sample(self.height, grid, mode="nearest", padding_mode="zeros", align_corners=True)
     self.valid = F.grid_sample(self.valid.float(), grid, mode="nearest", padding_mode="zeros",
                                align_corners=True) > 0.5
+    moved_first = F.grid_sample(self.first_hit_time, grid, mode="nearest",
+                                padding_mode="zeros", align_corners=True)
+    in_old_map = (grid.abs() <= 1).all(dim=-1).unsqueeze(1)
+    self.first_hit_time = torch.where(in_old_map, moved_first,
+                                      torch.full_like(moved_first, -1e6))
     self.center = new_center
 
   def _occlusion_samples(self, head: torch.Tensor, hits: torch.Tensor,
@@ -150,7 +176,8 @@ class StudentHeightMap:
     inside = (grid.abs() <= 1).all(dim=-1)
     return torch.where(inside, sample, torch.full_like(sample, float("nan")))
 
-  def __call__(self, env, sensor_name: str, map_cfg: StudentMapCfg) -> torch.Tensor:
+  def __call__(self, env, sensor_name: str, map_cfg: StudentMapCfg,
+               return_history: bool = False) -> torch.Tensor:
     del map_cfg
     robot = env.scene["robot"]
     names = list(robot.body_names)
@@ -168,26 +195,62 @@ class StudentHeightMap:
     if self.last_step != env.common_step_counter or self.fresh.any():
       update = (now - self.last_map_time >= 1 / self.cfg.map_hz) | self.fresh
       if update.any():
+        older = update & ~self.fresh
+        self.previous_height[older] = self.height[older]
+        self.previous_valid[older] = self.valid[older]
+        self.previous_filled_height[older] = self.filled_height[older]
+        self.previous_fill_valid[older] = self.fill_valid[older]
+        self.previous_center[older] = self.center[older]
+        initial = update & self.fresh
         new_center = torch.round(pelvis[:, :2] / self.cfg.resolution) * self.cfg.resolution
         self._move_map(new_center)
         # Initial maps must not inherit observations from an earlier episode.
         self.height[self.fresh] = 0
         self.valid[self.fresh] = False
+        self.first_hit_time[self.fresh] = -1e6
         true_z = torch.where(hit_valid, hits[..., 2], torch.full_like(hits[..., 2], float("nan")))
         intermediate = self._occlusion_samples(head, hits, true_z, pelvis, yaw)
         seen = visibility(head, hits, hit_valid, self.cfg, intermediate) & update[:, None]
-        index = torch.round((hits[..., :2] - self.center[:, None, :] ) / self.cfg.resolution
+        if self.cfg.hit_keep_probability < 1:
+          seen &= torch.rand(seen.shape, device=self.device) < self.cfg.hit_keep_probability
+        hit_xy = hits[..., :2]
+        if self.cfg.pose_noise_xy_std_m:
+          hit_xy = hit_xy + torch.randn((self.n, 1, 2), device=self.device) * self.cfg.pose_noise_xy_std_m
+        index = torch.round((hit_xy - self.center[:, None, :] ) / self.cfg.resolution
                             + (self.cfg.cells - 1) / 2).long()
         inside = (index >= 0).all(dim=-1) & (index < self.cfg.cells).all(dim=-1)
         b, n = torch.where(seen & inside)
         if len(b):
           flat = index[b, n, 1] * self.cfg.cells + index[b, n, 0]
-          self.height.view(self.n, -1)[b, flat] = hits[b, n, 2]
+          measured_z = hits[..., 2]
+          if self.cfg.height_bias_std_m:
+            # Smooth patches across the probe footprint, not white noise on
+            # the final 693 policy observations.
+            bias = F.interpolate(
+              torch.randn((self.n, 1, 9, 9), device=self.device),
+              size=(self._probe_side, self._probe_side), mode="bilinear",
+              align_corners=True).reshape(self.n, -1)
+            measured_z = measured_z + bias * self.cfg.height_bias_std_m
+          if self.cfg.height_noise_std_m:
+            measured_z = measured_z + torch.randn(measured_z.shape, device=self.device) * self.cfg.height_noise_std_m
+          self.height.view(self.n, -1)[b, flat] = measured_z[b, n]
+          first = self.first_hit_time.view(self.n, -1)
+          previous = first[b, flat]
+          first[b, flat] = torch.where(previous < -1e5, now, previous)
+        if self.cfg.observation_delay_s:
+          self.valid |= ((self.first_hit_time > -1e5) &
+                         (now - self.first_hit_time >= self.cfg.observation_delay_s))
+        elif len(b):
           self.valid.view(self.n, -1)[b, flat] = True
         filled, fill_valid = fill_unknown(self.height[:, 0], self.valid[:, 0],
                                           self.cfg.inpaint_passes)
         self.filled_height = filled.unsqueeze(1)
         self.fill_valid = fill_valid.unsqueeze(1)
+        self.previous_height[initial] = self.height[initial]
+        self.previous_valid[initial] = self.valid[initial]
+        self.previous_filled_height[initial] = self.filled_height[initial]
+        self.previous_fill_valid[initial] = self.fill_valid[initial]
+        self.previous_center[initial] = self.center[initial]
         self.last_map_time[update] = now
         self.fresh[update] = False
       self.last_step = env.common_step_counter
@@ -197,20 +260,33 @@ class StudentHeightMap:
     c, s = yaw.cos()[:, None], yaw.sin()[:, None]
     xy = torch.stack((pelvis[:, None, 0] + c * self.offsets[:, 0] - s * self.offsets[:, 1],
                       pelvis[:, None, 1] + s * self.offsets[:, 0] + c * self.offsets[:, 1]), dim=-1)
-    observed = self._sample(self.height, xy, self.center)
-    valid = self._sample(self.valid.float(), xy, self.center) > 0.5
-    filled = self._sample(self.filled_height, xy, self.center)
-    fill_valid = self._sample(self.fill_valid.float(), xy, self.center) > 0.5
     feet = robot.data.body_link_pos_w[:, [names.index("left_ankle_roll_link"),
                                           names.index("right_ankle_roll_link")], 2]
     foot_height = feet.min(dim=1).values[:, None] - self.cfg.sole_depth
     near = torch.linalg.vector_norm(self.offsets, dim=-1) < self.cfg.near_radius - 1e-6
-    ground, source = select_ground(observed, valid, filled,
-                                   fill_valid, near[None], foot_height)
+    def project(height, valid_map, filled_map, fill_valid_map, center):
+      observed = self._sample(height, xy, center)
+      valid = self._sample(valid_map.float(), xy, center) > 0.5
+      filled = self._sample(filled_map, xy, center)
+      fill_valid = self._sample(fill_valid_map.float(), xy, center) > 0.5
+      return select_ground(observed, valid, filled, fill_valid, near[None], foot_height)
+
+    ground, source = project(self.height, self.valid, self.filled_height, self.fill_valid, self.center)
     self.last_source = source
-    self.last_observed = valid
+    self.last_observed = source == 0
     self.map_age_s = now - self.last_map_time
-    return (pelvis[:, 2, None] - ground).clamp(-1.0, 2.0)
+    current = (pelvis[:, 2, None] - ground).clamp(-1.0, 2.0)
+    if not return_history:
+      return current
+    previous_ground, _ = project(self.previous_height, self.previous_valid,
+                                 self.previous_filled_height, self.previous_fill_valid,
+                                 self.previous_center)
+    previous = (pelvis[:, 2, None] - previous_ground).clamp(-1.0, 2.0)
+    # The ROS scan is flattened lateral-major (21x33). The CNN expects
+    # longitudinal rows and lateral columns (33x21).
+    current = current.reshape(self.n, 21, 33).transpose(1, 2).reshape(self.n, -1)
+    previous = previous.reshape(self.n, 21, 33).transpose(1, 2).reshape(self.n, -1)
+    return torch.cat((current, previous), dim=-1)
 
 
 def attach_student_map(cfg, map_cfg: StudentMapCfg | None = None):
@@ -219,7 +295,18 @@ def attach_student_map(cfg, map_cfg: StudentMapCfg | None = None):
 
   result = copy.deepcopy(cfg)
   map_cfg = map_cfg or StudentMapCfg()
-  result.scene.sensors = (result.scene.sensors or ()) + (RayCastSensorCfg(
+  result.scene.sensors = (result.scene.sensors or ()) + (student_probe_cfg(map_cfg),)
+  if "height_scan" not in result.observations["actor"].terms:
+    raise ValueError("Expected an actor height_scan term")
+  result.observations["actor"].terms["height_scan"] = ObservationTermCfg(
+    func=StudentHeightMap, params={"sensor_name": "student_map_probe", "map_cfg": map_cfg},
+    clip=(-1.0, 2.0),
+  )
+  return result
+
+
+def student_probe_cfg(map_cfg: StudentMapCfg) -> RayCastSensorCfg:
+  return RayCastSensorCfg(
     name="student_map_probe",
     frame=ObjRef(type="body", name="pelvis", entity="robot"),
     ray_alignment="yaw",
@@ -231,11 +318,4 @@ def attach_student_map(cfg, map_cfg: StudentMapCfg | None = None):
     exclude_parent_body=True,
     include_geom_groups=TERRAIN_GROUPS,
     debug_vis=False,
-  ),)
-  if "height_scan" not in result.observations["actor"].terms:
-    raise ValueError("Expected an actor height_scan term")
-  result.observations["actor"].terms["height_scan"] = ObservationTermCfg(
-    func=StudentHeightMap, params={"sensor_name": "student_map_probe", "map_cfg": map_cfg},
-    clip=(-1.0, 2.0),
   )
-  return result
