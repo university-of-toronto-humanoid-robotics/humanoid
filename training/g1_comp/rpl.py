@@ -41,7 +41,7 @@ def rpl_env_cfg(
   foothold_enabled: bool = True,
   foothold_epsilon: float = 0.05,
   foothold_contact_force: float = 1.0,
-  foothold_weight: float = -1.0,
+  foothold_weight: float | None = None,
 ) -> ManagerBasedRlEnvCfg:
   """Specialize only the world and commands; retain the 791-input policy and rewards.
 
@@ -50,6 +50,9 @@ def rpl_env_cfg(
   """
   if feature not in RPL_TASKS.values():
     raise ValueError(f"Unknown RPL feature: {feature}")
+  # Descent uses stronger foothold support; callers can still override it.
+  if foothold_weight is None:
+    foothold_weight = -5.0 if feature == "descend" else -1.0
   if stumble_weight > 0 or foothold_weight > 0:
     raise ValueError("Safety penalties need nonpositive reward weights")
   cfg = open_heightmap_env_cfg(play=play) if feature == "obstacles" else g1_rough_heightmap_env_cfg(play=play)
@@ -96,7 +99,7 @@ def rpl_env_cfg(
     cfg.rewards["sequential_tread_contact"] = RewardTermCfg(
       func=SequentialTreadReward,
       weight=1.0,
-      params={"min_support_ratio": 0.50, "min_contact_duration": 0.10,
+      params={"min_support_ratio": 0.50, "min_contact_duration": 0.20,
               "contact_weight": 0.5, "completion_bonus": 0.5,
               "alternation_factor": 0.5, "window_duration": 0.30},
     )
