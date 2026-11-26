@@ -31,8 +31,8 @@ class Ring:
     if self.observations is None:
       self.observations = torch.empty((self.capacity, TemporalStudentActor.OBS_DIM), dtype=torch.float16)
       self.actions = torch.empty((self.capacity, 29), dtype=torch.float16)
-    observations = observations.detach().to(device="cpu", dtype=torch.float16)[-self.capacity:]
-    actions = actions.detach().to(device="cpu", dtype=torch.float16)[-self.capacity:]
+    observations = observations.detach()[-self.capacity:].to(device="cpu", dtype=torch.float16)
+    actions = actions.detach()[-self.capacity:].to(device="cpu", dtype=torch.float16)
     positions = (torch.arange(len(observations)) + self.pointer) % self.capacity
     self.observations[positions] = observations
     self.actions[positions] = actions

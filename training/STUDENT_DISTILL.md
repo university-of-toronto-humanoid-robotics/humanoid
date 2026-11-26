@@ -54,6 +54,10 @@ The third starts from random weights. In all three modes the **student** control
 the robots, while each frozen expert labels the state visited by its terrain
 pool. The four curricula progress independently based on student traversal.
 The latter two modes train only on student-visited examples.
+DAgger samples expert labels across the entire rollout instead of retaining
+only its final steps. Each update adds at most one eighth of the per-terrain
+replay capacity, so a full buffer spans about eight updates. The student still
+controls every rollout step; the expert is called only for sampled states.
 
 ## Colab notebook
 
@@ -61,8 +65,15 @@ Run `notebooks/train_student.ipynb` in order. Its first cell can authenticate
 GitHub and clone the selected branch, or load `humanoid-source.tar.gz` from
 Drive when GitHub login is unavailable. Then it installs the mjlab dependencies
 and mounts Drive. In the options cell choose BC, one of the three DAgger start modes,
-or resume; choose the four expert checkpoints and the student weight and demo
-checkpoints separately. New saves keep weights and demos in separate `.pt` files.
+joint BC → DAgger, or resume. The four expert checkpoints and logging settings
+are shared. BC and DAgger have separate environment counts, updates, rollout
+steps, batches, replay capacities, save intervals, and learning rates; settings
+for an unselected stage are ignored. For a standalone DAgger run, select the BC
+weight and demo files separately. New saves keep weights and demos in separate `.pt` files.
+Joint mode starts DAgger from the BC run's final weights and demos automatically.
+It writes separate W&B runs named `<run_name>_bc` and `<run_name>_dagger` and
+separate BC and DAgger checkpoint folders. If interrupted after BC completes,
+choose standalone `DAgger: BC weights + demos` with those saved files.
 Checkpoints and logs go directly to `MyDrive/humanoid/logs/student_distill`.
 Rerun the options cell after BC finishes to discover its new checkpoint. For
 GitHub mode, push this notebook and the trainer code to the selected branch
@@ -83,3 +94,20 @@ replay capacity when resuming. Increase `--updates` beyond the saved update.
 all add memory cost. Check the loss and per-terrain level and success metrics
 before increasing parallel environments. The training loss imitates actions;
 environment rewards are not optimized by the student.
+
+## Play a student on an RPL terrain
+
+From `training/`, use the student player (the regular `play.py` expects an
+RSL-RL expert checkpoint):
+
+```bash
+python scripts/play_student_rpl.py obstacles \
+  --checkpoint models/RPL/student/bc/student_400.pt \
+  --terrain-level 9 --map-mode corrupted --viewer viser
+```
+
+Choose `ascend`, `descend`, `ramps`, or `obstacles`. Use `--map-mode clean` for
+exact terrain scans in both CNN map channels, or `corrupted` for the training
+student's delayed/noisy mapping and joint observations. For a local MuJoCo
+window on macOS, use `mjpython` with `--viewer native`. The Viser command panel
+can steer the robot as in the RPL expert viewer. `--seed` fixes the lane sample.

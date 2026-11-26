@@ -26,6 +26,8 @@ class StudentMappingTest(unittest.TestCase):
     try:
       env.reset(seed=42)
       term = env.observation_manager.get_term_cfg("actor", "height_scan").func
+      self.assertEqual(term.cfg.observation_delay_s, 0.0)
+      self.assertGreater((term.last_source == 0).float().mean().item(), 0.0)
       ros = ros_scan_module()
       for step in range(20):  # Cross the 3 Hz map refresh at step 17.
         obs, *_ = env.step(torch.zeros((1, 29)))

@@ -7,6 +7,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 import hashlib
+import math
 import os
 import random
 
@@ -28,6 +29,19 @@ from .student_replay import StudentReplay
 
 def bc_fraction(update: int, decay_updates: int = 1000) -> float:
   return 0.5 - 0.4 * min(update / decay_updates, 1.0)
+
+
+def dagger_label_schedule(rollout_steps: int, num_envs: int, replay_capacity: int) -> dict[int, int]:
+  """Sample across the rollout and retain about eight updates in replay."""
+  budget = min(max(1, replay_capacity // 8), rollout_steps * num_envs)
+  groups = min(rollout_steps, budget, max(4, math.ceil(budget / num_envs)))
+  schedule = {}
+  for group in range(groups):
+    start = group * rollout_steps // groups
+    end = (group + 1) * rollout_steps // groups
+    step = random.randrange(start, end)
+    schedule[step] = budget // groups + (group < budget % groups)
+  return schedule
 
 
 def add_common_args(parser: argparse.ArgumentParser):
@@ -236,17 +250,23 @@ class StudentTrainer:
     with torch.inference_mode():
       for feature, pool in self.pools.items():
         observed, labeled, levels = [], [], []
+        label_schedule = ({} if self.stage == "bc" else dagger_label_schedule(
+          self.args.rollout_steps, pool.env.num_envs, self.args.replay_capacity
+        ))
         completions = torch.zeros((), device=self.device)
         falls = torch.zeros((), device=self.device)
         resets = torch.zeros((), device=self.device)
-        for _ in range(self.args.rollout_steps):
+        for step in range(self.args.rollout_steps):
           student_input = pool.obs["student"]
-          teacher_action = pool.teacher(pool.obs)
-          action = teacher_action if self.stage == "bc" else self.student(pool.obs)
-          observed.append(student_input.detach().clone())
-          labeled.append(teacher_action.detach().clone())
+          action = pool.teacher(pool.obs) if self.stage == "bc" else self.student(pool.obs)
           if self.stage == "bc":
+            observed.append(student_input.detach().clone())
+            labeled.append(action.detach().clone())
             levels.append(pool.terrain.terrain_levels.detach().clone())
+          elif step in label_schedule:
+            selected = torch.randperm(pool.env.num_envs, device=self.device)[:label_schedule[step]]
+            observed.append(student_input[selected].detach().clone())
+            labeled.append(pool.teacher(pool.obs[selected]).detach().clone())
           pool.obs, _, done, _ = pool.env.step(action)
           self.student.update_normalization(TensorDict({"student": student_input}, batch_size=[len(student_input)]))
           resets += done.sum()

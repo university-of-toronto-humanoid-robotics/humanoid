@@ -32,7 +32,7 @@ class StudentMapCfg:
   sole_depth: float = 0.035
   inpaint_passes: int = 16
   probe_resolution: float = 0.10  # candidate hits over the entire 5 m map
-  observation_delay_s: float = 2.0  # delay before a new cell counts as observed
+  observation_delay_s: float = 0.0  # use visible hits on the first map update
   hit_keep_probability: float = 1.0  # effective map coverage after visibility filtering
   height_bias_std_m: float = 0.065  # spatially correlated error on each map update
   height_noise_std_m: float = 0.015  # independent error on retained height hits

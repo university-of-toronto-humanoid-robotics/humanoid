@@ -24,13 +24,14 @@ This is a **geometric approximation**, not the actual ROS mapper. The probe
 uses exact simulated terrain before visibility filtering. It does not reproduce
 individual Livox rays, FAST-LIO pose drift, the robot's full self-filter mesh,
 CuPy elevation variance and Bayesian update, or the ROS filter's exact inpaint
-algorithm. New cells are held as unobserved for 2 seconds, approximating the
-slower buildup in the recorded ROS map. Each refresh also adds a smooth spatial
-height bias (6.5 cm standard deviation at the coarse noise nodes), 1.5 cm
+algorithm. Visible hits are available on the first map update, including at
+episode reset; unobserved cells still use the foot-height or inpaint fallback.
+Each refresh also adds a smooth spatial height bias (6.5 cm standard deviation
+at the coarse noise nodes), 1.5 cm
 independent hit error, and 2 cm shared XY placement error. These are effective
 training perturbations, not measured Livox sensor specifications. They affect
 stored map hits, not the 693 policy values directly. All are configurable in
-`StudentMapCfg`; setting the delay and noise standard deviations to zero
+`StudentMapCfg`; setting the noise standard deviations to zero
 recovers the clean geometric prototype.
 
 From `training/`, run a one-environment CPU check:
@@ -91,10 +92,12 @@ change a policy.
 
 On the 2026-11-25 room-stairs capture, the clean prototype had 3.8 cm mean
 per-step scan RMSE against true terrain, versus 7.3 cm for ROS. With the
-current defaults, student replay seeds 42–44 gave 7.5–7.9 cm. Mean disagreement
-about which policy-scan cells were observed fell from 6.5% to 5.8–6.0%; in
+earlier 2-second delay, student replay seeds 42–44 gave 7.5–7.9 cm. Mean
+disagreement about which policy-scan cells were observed fell from 6.5% to
+5.8–6.0%; in
 the first quarter it fell from 17.5% to about 12.7%. This is a calibration on
-**one** simulated scene and trajectory. The noise can still be too strong in
+**one** simulated scene and trajectory; those figures do not describe the
+current zero-delay setting. The noise can still be too strong in
 otherwise clear regions, and these numbers should not be treated as a
 guarantee that ROS is more accurate at every point or on other terrain.
 
