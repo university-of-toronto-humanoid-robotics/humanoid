@@ -88,6 +88,9 @@ class StudentHeightMap:
   """Observation term with per-environment moving map and reset support."""
 
   def __init__(self, cfg: ObservationTermCfg, env):
+    self.history_length = cfg.params.get("history_length", 5)
+    if self.history_length not in (2, 5):
+      raise ValueError("Student map history must contain 2 or 5 scans")
     cfg: StudentMapCfg = cfg.params["map_cfg"]
     if cfg.cells * cfg.resolution != 5.0:
       raise ValueError("Student map must cover 5 m at the configured resolution")
@@ -105,11 +108,9 @@ class StudentHeightMap:
     self.filled_height = torch.zeros_like(self.height)
     self.fill_valid = torch.zeros_like(self.valid)
     self.center = torch.zeros((self.n, 2), device=env.device)
-    self.previous_height = torch.zeros_like(self.height)
-    self.previous_valid = torch.zeros_like(self.valid)
-    self.previous_filled_height = torch.zeros_like(self.filled_height)
-    self.previous_fill_valid = torch.zeros_like(self.fill_valid)
-    self.previous_center = torch.zeros_like(self.center)
+    # Store only policy-size scans from earlier 3 Hz updates, not four more
+    # copies of the 100 x 100 world map for every parallel environment.
+    self.scan_history = torch.zeros((self.n, 5, 33 * 21), device=env.device)
     self.fresh = torch.ones(self.n, dtype=torch.bool, device=env.device)
     self.last_step = -1
     self.last_map_time = torch.full((self.n,), -1e6, device=env.device)
@@ -135,10 +136,7 @@ class StudentHeightMap:
     self.fill_valid[ids] = False
     self.fresh[ids] = True
     self.last_map_time[ids] = -1e6
-    self.previous_height[ids] = 0
-    self.previous_valid[ids] = False
-    self.previous_filled_height[ids] = 0
-    self.previous_fill_valid[ids] = False
+    self.scan_history[ids] = 0
 
   def _sample(self, data: torch.Tensor, xy: torch.Tensor, center: torch.Tensor,
               mode: str = "nearest") -> torch.Tensor:
@@ -177,8 +175,8 @@ class StudentHeightMap:
     return torch.where(inside, sample, torch.full_like(sample, float("nan")))
 
   def __call__(self, env, sensor_name: str, map_cfg: StudentMapCfg,
-               return_history: bool = False) -> torch.Tensor:
-    del map_cfg
+               return_history: bool = False, history_length: int = 5) -> torch.Tensor:
+    del map_cfg, history_length
     robot = env.scene["robot"]
     names = list(robot.body_names)
     pelvis = robot.data.body_link_pose_w[:, names.index("pelvis")]
@@ -192,15 +190,12 @@ class StudentHeightMap:
     hits = sensor.data.hit_pos_w
     hit_valid = sensor.data.distances >= 0
     now = env.common_step_counter * env.step_dt
+    updated = torch.zeros(self.n, dtype=torch.bool, device=self.device)
+    initial = updated
     if self.last_step != env.common_step_counter or self.fresh.any():
       update = (now - self.last_map_time >= 1 / self.cfg.map_hz) | self.fresh
       if update.any():
-        older = update & ~self.fresh
-        self.previous_height[older] = self.height[older]
-        self.previous_valid[older] = self.valid[older]
-        self.previous_filled_height[older] = self.filled_height[older]
-        self.previous_fill_valid[older] = self.fill_valid[older]
-        self.previous_center[older] = self.center[older]
+        updated = update
         initial = update & self.fresh
         new_center = torch.round(pelvis[:, :2] / self.cfg.resolution) * self.cfg.resolution
         self._move_map(new_center)
@@ -246,11 +241,6 @@ class StudentHeightMap:
                                           self.cfg.inpaint_passes)
         self.filled_height = filled.unsqueeze(1)
         self.fill_valid = fill_valid.unsqueeze(1)
-        self.previous_height[initial] = self.height[initial]
-        self.previous_valid[initial] = self.valid[initial]
-        self.previous_filled_height[initial] = self.filled_height[initial]
-        self.previous_fill_valid[initial] = self.fill_valid[initial]
-        self.previous_center[initial] = self.center[initial]
         self.last_map_time[update] = now
         self.fresh[update] = False
       self.last_step = env.common_step_counter
@@ -278,15 +268,15 @@ class StudentHeightMap:
     current = (pelvis[:, 2, None] - ground).clamp(-1.0, 2.0)
     if not return_history:
       return current
-    previous_ground, _ = project(self.previous_height, self.previous_valid,
-                                 self.previous_filled_height, self.previous_fill_valid,
-                                 self.previous_center)
-    previous = (pelvis[:, 2, None] - previous_ground).clamp(-1.0, 2.0)
     # The ROS scan is flattened lateral-major (21x33). The CNN expects
     # longitudinal rows and lateral columns (33x21).
     current = current.reshape(self.n, 21, 33).transpose(1, 2).reshape(self.n, -1)
-    previous = previous.reshape(self.n, 21, 33).transpose(1, 2).reshape(self.n, -1)
-    return torch.cat((current, previous), dim=-1)
+    if updated.any():
+      prior = self.scan_history[updated, :-1].clone()
+      self.scan_history[updated, 1:] = prior
+      self.scan_history[updated, 0] = current[updated]
+      self.scan_history[initial] = current[initial, None, :].expand(-1, 5, -1)
+    return torch.cat((current[:, None, :], self.scan_history[:, 1:self.history_length]), dim=1).flatten(1)
 
 
 def attach_student_map(cfg, map_cfg: StudentMapCfg | None = None):

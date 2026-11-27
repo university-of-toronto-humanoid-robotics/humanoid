@@ -4,12 +4,17 @@ Run from `training/` with the mjlab Python environment, or use
 `notebooks/train_student.ipynb` on Colab. The expert PPO tasks are unchanged.
 
 The frozen ascend, descend, ramps, and obstacles experts see their original
-791-value, clean playback observations. The student sees the ROS-like current
-elevation map, its previous 3 Hz map aligned to the current pelvis, five joint
+791-value, clean playback observations. The student sees five successive 3 Hz
+elevation scans (current plus four earlier updates), five joint
 position frames, and the remaining G1 state. Student joint positions receive
 independent Gaussian noise (0.01 rad per new frame), and current joint velocities
-receive 0.5 rad/s Gaussian noise. The 1600-value student input produces 29 joint
-actions through a two-channel CNN and the existing 512–256–256–128 MLP design.
+receive 0.5 rad/s Gaussian noise. The 3679-value student input has five maps
+passed through one shared CNN into five 128-value tokens. A two-layer, four-head
+transformer with learned positions contextualizes them; the five outputs are
+flattened and projected to 128 values before the existing 512–256–256–128 MLP.
+The five maps span about 1.33 seconds after the history fills. At reset, all
+history slots contain the first available scan. Earlier scans keep the pose
+frame in which they were captured.
 
 ## BC warmup
 
@@ -107,7 +112,7 @@ python scripts/play_student_rpl.py obstacles \
 ```
 
 Choose `ascend`, `descend`, `ramps`, or `obstacles`. Use `--map-mode clean` for
-exact terrain scans in both CNN map channels, or `corrupted` for the training
+exact terrain scans in all five CNN map channels, or `corrupted` for the training
 student's delayed/noisy mapping and joint observations. For a local MuJoCo
 window on macOS, use `mjpython` with `--viewer native`. The Viser command panel
 can steer the robot as in the RPL expert viewer. `--seed` fixes the lane sample.

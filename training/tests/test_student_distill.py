@@ -102,15 +102,25 @@ class StudentDistillationTest(unittest.TestCase):
     self.assertEqual(student.terms["joint_pos"].noise.std, 0.01)
     self.assertEqual(student.terms["joint_vel"].noise.std, 0.5)
     self.assertTrue(student.terms["height_scan"].params["return_history"])
-    self.assertEqual(TemporalStudentActor.OBS_DIM, 1600)
+    self.assertEqual(TemporalStudentActor.OBS_DIM, 214 + 5 * 33 * 21)
     self.assertNotIn("terrain_levels", cfg.curriculum)
     dagger = student_env_cfg("ascend", stage="dagger", num_envs=10)
     self.assertIn("terrain_levels", dagger.curriculum)
 
+  def test_five_map_actor_contract(self):
+    obs = TensorDict({"student": torch.zeros((2, TemporalStudentActor.OBS_DIM))}, batch_size=[2])
+    actor = TemporalStudentActor(obs, {"student": ["student"]}, "student")
+    self.assertEqual(actor.terrain_encoder[0].in_channels, 1)
+    self.assertEqual(len(actor.map_transformer.layers), 2)
+    self.assertEqual(actor.map_transformer.layers[0].self_attn.num_heads, 4)
+    self.assertEqual(tuple(actor.map_positions.shape), (1, 5, 128))
+    self.assertEqual(actor.map_projection.in_features, 5 * 128)
+    self.assertEqual(tuple(actor(obs).shape), (2, 29))
+
   def test_balanced_replay_and_resume(self):
     replay = StudentReplay(100)
     for terrain_index, feature in enumerate(FEATURES):
-      observations = torch.zeros((10, 1600))
+      observations = torch.zeros((10, TemporalStudentActor.OBS_DIM))
       observations[:, 0] = torch.arange(10) + terrain_index * 10
       labels = torch.zeros((10, 29))
       levels = torch.arange(10)

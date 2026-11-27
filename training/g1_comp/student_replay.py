@@ -23,7 +23,7 @@ class Ring:
 
   def add(self, observations: torch.Tensor, actions: torch.Tensor):
     if observations.ndim != 2 or observations.shape[1] != TemporalStudentActor.OBS_DIM:
-      raise ValueError("Expected 1600-value student observations")
+      raise ValueError(f"Expected {TemporalStudentActor.OBS_DIM}-value student observations")
     if actions.shape != (len(observations), 29):
       raise ValueError("Expected matching 29-value teacher actions")
     if not len(observations):

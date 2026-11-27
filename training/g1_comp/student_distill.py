@@ -61,7 +61,7 @@ def student_env_cfg(feature: str, *, stage: str, num_envs: int,
 
   student = deepcopy(cfg.observations["actor"])
   student.enable_corruption = True
-  student.history_length = None  # Only joint positions receive five frames.
+  student.history_length = None  # Joint history is managed here; map history is in StudentHeightMap.
   student.terms["joint_pos"].history_length = 5
   student.terms["joint_pos"].noise = GaussianNoiseCfg(mean=0.0, std=0.01)
   student.terms["joint_vel"].noise = GaussianNoiseCfg(mean=0.0, std=0.5)

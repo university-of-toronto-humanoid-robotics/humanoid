@@ -139,7 +139,7 @@ class Pool:
                                  clip_actions=agent_cfg.clip_actions)
     try:
       self.obs = self.env.get_observations()
-      if self.obs["actor"].shape[-1] != 791 or self.obs["student"].shape[-1] != 1600:
+      if self.obs["actor"].shape[-1] != 791 or self.obs["student"].shape[-1] != TemporalStudentActor.OBS_DIM:
         raise ValueError(f"Unexpected teacher/student observation layout for {feature}")
       runner = load_runner_cls(TASKS[feature])(self.env, asdict(agent_cfg), device=device)
       runner.load(str(teacher_checkpoint), load_cfg={"actor": True}, strict=True,
@@ -173,6 +173,8 @@ class StudentTrainer:
     self.saved = torch.load(args.resume, map_location="cpu", weights_only=False) if args.resume else None
     self.saved_replay = _replay_from_file(args.resume, self.saved) if self.saved else None
     if self.saved:
+      if self.saved.get("observation_dim", 1600) != TemporalStudentActor.OBS_DIM:
+        raise ValueError("Resume checkpoint uses the old student architecture; start a new run")
       if self.saved["stage"] != stage or self.saved["teacher_hashes"] != self.teacher_hashes:
         raise ValueError("Resume checkpoint stage or expert contents differ")
       if stage == "dagger":
@@ -214,6 +216,8 @@ class StudentTrainer:
       _restore_rng(self.saved["rng"])
     elif stage == "dagger" and args.init_mode != "scratch":
       source = torch.load(args.bc_checkpoint, map_location="cpu", weights_only=False)
+      if source.get("observation_dim", 1600) != TemporalStudentActor.OBS_DIM:
+        raise ValueError("BC checkpoint uses the old student architecture; train new BC weights")
       if source["stage"] != "bc" or source["teacher_hashes"] != self.teacher_hashes:
         raise ValueError("BC checkpoint stage or expert contents differ")
       self.student.load_state_dict(source["student"])
@@ -315,6 +319,7 @@ class StudentTrainer:
     path = folder / f"student_{update}.pt"
     demo_path = folder / f"demos_{update}.pt"
     state = {"version": 2, "stage": self.stage, "update": update,
+             "observation_dim": TemporalStudentActor.OBS_DIM,
              "init_mode": self.args.init_mode if self.stage == "dagger" else None,
              "num_envs": self.args.num_envs, "teacher_paths": self.source_paths,
              "teacher_hashes": self.teacher_hashes,
