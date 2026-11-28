@@ -465,10 +465,11 @@ def rpl_world_cfg(feature: str, beam_group: int = 0) -> TerrainGeneratorCfg:
 
 @dataclass(kw_only=True)
 class MazeTerrainCfg(SubTerrainCfg):
-  """One corridor tile with offset doorways, a ramp and step-over beams."""
+  """One corridor tile with offset doorways and optional floor obstacles."""
 
   beam_group: int = 1
   preview_start_only: bool = False
+  flat_only: bool = False
   size: tuple[float, float] = TILE_SIZE
 
   def __post_init__(self) -> None:
@@ -498,19 +499,21 @@ class MazeTerrainCfg(SubTerrainCfg):
       lower, upper = center - opening / 2, center + opening / 2
       tile.box("wall", x0, x1, 0, lower, 1.5, shade=1.35)
       tile.box("wall", x0, x1, upper, width, 1.5, shade=1.35)
-      tile.box("sill", x0, x1, lower, upper, _lerp(0.02, MAX_SILL, difficulty))
+      if not self.flat_only:
+        tile.box("sill", x0, x1, lower, upper, _lerp(0.02, MAX_SILL, difficulty))
       if side is not None:
         tile.panel(*maze_leaf_endpoints(x0, center, opening, side), top=1.5)
 
-    # A short two-tile hill and two step-over beams occupy the open gaps.
-    low = RAMP_BASE * difficulty
-    high = low + RAMP_TILE * math.tan(math.radians(_lerp(4.0, MAX_RAMP_ANGLE, difficulty)))
-    for i, direction in enumerate(("+x", "-x")):
-      tile.wedge(3.55 + (i + 0.5) * RAMP_TILE, tile.yc,
-                 RAMP_TILE / 2, lane_width / 2, direction, low, high)
-    beam_top = _lerp(0.03, MAX_BEAM, difficulty)
-    for x in (3.15, 6.85):
-      tile.beam((x, lo), (x, hi), beam_top)
+    if not self.flat_only:
+      # A short two-tile hill and two step-over beams occupy the open gaps.
+      low = RAMP_BASE * difficulty
+      high = low + RAMP_TILE * math.tan(math.radians(_lerp(4.0, MAX_RAMP_ANGLE, difficulty)))
+      for i, direction in enumerate(("+x", "-x")):
+        tile.wedge(3.55 + (i + 0.5) * RAMP_TILE, tile.yc,
+                   RAMP_TILE / 2, lane_width / 2, direction, low, high)
+      beam_top = _lerp(0.03, MAX_BEAM, difficulty)
+      for x in (3.15, 6.85):
+        tile.beam((x, lo), (x, hi), beam_top)
 
     # Flat start spots away from the constrictions and obstacles.
     start_locations = ((0.4, 0.0),) if self.preview_start_only else ((0.4, 0.0), (3.15, offset))
@@ -523,9 +526,10 @@ class MazeTerrainCfg(SubTerrainCfg):
                          flat_patches={"spawn": spots})
 
 
-def maze_world_cfg(preview_start_only: bool = False) -> TerrainGeneratorCfg:
-  """Curriculum of winding corridors; ramps and beams, with no stairs."""
-  return _lanes({"maze": MazeTerrainCfg(preview_start_only=preview_start_only)}, 11)
+def maze_world_cfg(preview_start_only: bool = False, *, flat_only: bool = False) -> TerrainGeneratorCfg:
+  """Curriculum of winding corridors, optionally without floor obstacles."""
+  return _lanes({"maze": MazeTerrainCfg(preview_start_only=preview_start_only,
+                                        flat_only=flat_only)}, 11)
 
 
 def rough_world_cfg() -> TerrainGeneratorCfg:

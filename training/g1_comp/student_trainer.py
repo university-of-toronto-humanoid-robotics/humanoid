@@ -22,7 +22,7 @@ from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_rl_cfg, load_runner_cls
 
 from .student_actor import TemporalStudentActor
-from .student_distill import FEATURES, TASKS, student_env_cfg
+from .student_distill import FEATURES, FEATURES_V2, TASKS, student_env_cfg
 from .student_mapping.observation import StudentMapCfg
 from .student_replay import StudentReplay
 
@@ -45,11 +45,10 @@ def dagger_label_schedule(rollout_steps: int, num_envs: int, replay_capacity: in
 
 
 def add_common_args(parser: argparse.ArgumentParser):
-  parser.add_argument("--teacher-ascend", type=Path, required=True)
-  parser.add_argument("--teacher-descend", type=Path, required=True)
-  parser.add_argument("--teacher-ramps", type=Path, required=True)
-  parser.add_argument("--teacher-obstacles", type=Path, required=True)
-  parser.add_argument("--num-envs", type=int, default=1024, help="Total across four terrains")
+  parser.add_argument("--profile", choices=("four", "six"), default="four")
+  for feature in FEATURES_V2:
+    parser.add_argument(f"--teacher-{feature}", type=Path)
+  parser.add_argument("--num-envs", type=int, default=1024, help="Total across the selected experts")
   parser.add_argument("--rollout-steps", type=int, default=24)
   parser.add_argument("--updates", type=int, required=True)
   parser.add_argument("--batch-size", type=int, default=4096)
@@ -67,16 +66,18 @@ def add_common_args(parser: argparse.ArgumentParser):
 
 
 def validate_args(args, stage):
-  if args.num_envs < (40 if stage == "bc" else 4) or args.num_envs % 4:
-    raise ValueError("BC needs at least 40 total envs; both stages need a multiple of four")
+  features = FEATURES if args.profile == "four" else FEATURES_V2
+  count = len(features)
+  if args.num_envs < (count * 10 if stage == "bc" else count) or args.num_envs % count:
+    raise ValueError(f"BC needs at least {count * 10} envs; both stages need a multiple of {count}")
   for name in ("rollout_steps", "updates", "batch_size", "gradient_steps", "save_every", "replay_capacity"):
     if getattr(args, name) < 1:
       raise ValueError(f"{name} must be positive")
   if args.learning_rate <= 0:
     raise ValueError("learning_rate must be positive")
-  for feature in FEATURES:
+  for feature in features:
     path = getattr(args, f"teacher_{feature}")
-    if not path.is_file():
+    if path is None or not path.is_file():
       raise FileNotFoundError(f"Missing {feature} expert: {path}")
   if stage == "dagger":
     if args.resume and (args.init_mode or args.bc_checkpoint or args.bc_demo_checkpoint):
@@ -154,6 +155,11 @@ class Pool:
   def terrain(self):
     return self.env.unwrapped.scene.terrain
 
+  def levels(self):
+    if self.feature == "flat":
+      return torch.zeros(self.env.num_envs, device=self.env.unwrapped.device, dtype=torch.long)
+    return self.terrain.terrain_levels
+
   def close(self):
     self.env.close()
 
@@ -162,17 +168,20 @@ class StudentTrainer:
   def __init__(self, args, stage):
     validate_args(args, stage)
     self.args, self.stage = args, stage
+    self.features = FEATURES if args.profile == "four" else FEATURES_V2
     self.device = args.device
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
       torch.cuda.manual_seed_all(args.seed)
-    self.source_paths = {f: str(getattr(args, f"teacher_{f}").resolve()) for f in FEATURES}
+    self.source_paths = {f: str(getattr(args, f"teacher_{f}").resolve()) for f in self.features}
     self.teacher_hashes = {f: _file_sha256(path) for f, path in self.source_paths.items()}
     self.saved = torch.load(args.resume, map_location="cpu", weights_only=False) if args.resume else None
     self.saved_replay = _replay_from_file(args.resume, self.saved) if self.saved else None
     if self.saved:
+      if self.saved.get("profile", "four") != args.profile:
+        raise ValueError("Resume checkpoint uses a different expert profile")
       if self.saved.get("observation_dim", 1600) != TemporalStudentActor.OBS_DIM:
         raise ValueError("Resume checkpoint uses the old student architecture; start a new run")
       if self.saved["stage"] != stage or self.saved["teacher_hashes"] != self.teacher_hashes:
@@ -191,22 +200,23 @@ class StudentTrainer:
       if self.saved.get("map_config", asdict(StudentMapCfg())) != asdict(StudentMapCfg()):
         raise ValueError("Student map settings changed since this checkpoint")
     self.run_dir = args.run_dir or (args.resume.parent.parent if args.resume else
-                   Path(__file__).resolve().parents[1] / "logs/student_distill" / stage /
+                   Path(__file__).resolve().parents[1] /
+                   ("logs/student_distill_v2" if args.profile == "six" else "logs/student_distill") / stage /
                    (datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_" + args.run_name))
     self.run_dir.mkdir(parents=True, exist_ok=True)
     self.pools = {}
     try:
-      for index, feature in enumerate(FEATURES):
+      for index, feature in enumerate(self.features):
         levels = self.saved["levels"][feature] if self.saved and stage == "dagger" else None
-        self.pools[feature] = Pool(feature, args.num_envs // 4, args.device,
+        self.pools[feature] = Pool(feature, args.num_envs // len(self.features), args.device,
                                    args.seed + index, stage, self.source_paths[feature], levels)
     except Exception:
       self.close()
       raise
-    obs = self.pools[FEATURES[0]].obs
+    obs = self.pools[self.features[0]].obs
     self.student = TemporalStudentActor(obs, {"student": ["student"]}, "student").to(args.device)
     self.optimizer = torch.optim.Adam(self.student.parameters(), lr=args.learning_rate)
-    self.replay = StudentReplay(args.replay_capacity)
+    self.replay = StudentReplay(args.replay_capacity, self.features)
     self.start_update = 0
     if self.saved:
       self.student.load_state_dict(self.saved["student"])
@@ -218,14 +228,16 @@ class StudentTrainer:
       source = torch.load(args.bc_checkpoint, map_location="cpu", weights_only=False)
       if source.get("observation_dim", 1600) != TemporalStudentActor.OBS_DIM:
         raise ValueError("BC checkpoint uses the old student architecture; train new BC weights")
-      if source["stage"] != "bc" or source["teacher_hashes"] != self.teacher_hashes:
+      if (source.get("profile", "four") != args.profile or source["stage"] != "bc" or
+          source["teacher_hashes"] != self.teacher_hashes):
         raise ValueError("BC checkpoint stage or expert contents differ")
       self.student.load_state_dict(source["student"])
       if args.init_mode == "bc-with-demos":
         demo_path = args.bc_demo_checkpoint or args.bc_checkpoint
         demo_source = (torch.load(demo_path, map_location="cpu", weights_only=False)
                        if args.bc_demo_checkpoint else source)
-        if demo_source["stage"] != "bc" or demo_source["teacher_hashes"] != self.teacher_hashes:
+        if (demo_source.get("profile", "four") != args.profile or demo_source["stage"] != "bc" or
+            demo_source["teacher_hashes"] != self.teacher_hashes):
           raise ValueError("BC demo checkpoint stage or expert contents differ")
         self.replay.load_bc_demos(_replay_from_file(demo_path, demo_source))
         if any(min(counts) == 0 for counts in self.replay.bc_coverage().values()):
@@ -238,7 +250,7 @@ class StudentTrainer:
                               dir=str(self.run_dir),
                               id=self.saved.get("wandb_run_id") if self.saved else None,
                               resume="allow" if self.saved else None,
-                              config={"stage": stage, "num_envs": args.num_envs,
+                              config={"stage": stage, "profile": args.profile, "num_envs": args.num_envs,
                                       "replay_capacity": args.replay_capacity})
 
   def close(self):
@@ -266,7 +278,7 @@ class StudentTrainer:
           if self.stage == "bc":
             observed.append(student_input.detach().clone())
             labeled.append(action.detach().clone())
-            levels.append(pool.terrain.terrain_levels.detach().clone())
+            levels.append(pool.levels().detach().clone())
           elif step in label_schedule:
             selected = torch.randperm(pool.env.num_envs, device=self.device)[:label_schedule[step]]
             observed.append(student_input[selected].detach().clone())
@@ -275,7 +287,7 @@ class StudentTrainer:
           self.student.update_normalization(TensorDict({"student": student_input}, batch_size=[len(student_input)]))
           resets += done.sum()
           term = pool.env.unwrapped.termination_manager
-          completions += term.get_term("rpl_feature_complete").sum()
+          completions += term.get_term("time_out" if feature == "flat" else "rpl_feature_complete").sum()
           falls += term.get_term("fell_over").sum()
         observations = torch.cat(observed)
         actions = torch.cat(labeled)
@@ -286,8 +298,8 @@ class StudentTrainer:
         stats[f"{feature}/resets"] = int(resets.item())
         stats[f"{feature}/successes"] = int(completions.item())
         stats[f"{feature}/falls"] = int(falls.item())
-        stats[f"{feature}/mean_level"] = float(pool.terrain.terrain_levels.float().mean())
-        stats[f"{feature}/max_level"] = int(pool.terrain.terrain_levels.max().item())
+        stats[f"{feature}/mean_level"] = float(pool.levels().float().mean())
+        stats[f"{feature}/max_level"] = int(pool.levels().max().item())
         stats[f"{feature}/success_rate"] = (stats[f"{feature}/successes"] /
                                              max(stats[f"{feature}/resets"], 1))
         if self.stage == "bc":
@@ -318,7 +330,7 @@ class StudentTrainer:
     folder.mkdir(exist_ok=True)
     path = folder / f"student_{update}.pt"
     demo_path = folder / f"demos_{update}.pt"
-    state = {"version": 2, "stage": self.stage, "update": update,
+    state = {"version": 2, "profile": self.args.profile, "stage": self.stage, "update": update,
              "observation_dim": TemporalStudentActor.OBS_DIM,
              "init_mode": self.args.init_mode if self.stage == "dagger" else None,
              "num_envs": self.args.num_envs, "teacher_paths": self.source_paths,
@@ -326,10 +338,11 @@ class StudentTrainer:
              "learning_rate": self.args.learning_rate, "map_config": asdict(StudentMapCfg()),
              "student": self.student.state_dict(), "optimizer": self.optimizer.state_dict(),
              "demo_file": demo_path.name,
-             "levels": {f: self.pools[f].terrain.terrain_levels.cpu().tolist() for f in FEATURES},
+             "levels": {f: self.pools[f].levels().cpu().tolist() if f != "flat" else None
+                        for f in self.features},
              "wandb_run_id": self.wandb.id if self.wandb else None,
              "rng": _rng_state()}
-    demos = {"version": 2, "stage": self.stage, "update": update,
+    demos = {"version": 2, "profile": self.args.profile, "stage": self.stage, "update": update,
              "teacher_hashes": self.teacher_hashes, "replay": self.replay.state_dict()}
     _save_atomic(demo_path, demos)
     _save_atomic(path, state)
@@ -352,7 +365,7 @@ class StudentTrainer:
         print(f"{self.stage} {update}/{self.args.updates}: "
               f"MSE={metrics['loss/action_mse']:.5f}, "
               + ", ".join(f"{f} level={metrics[f'{f}/mean_level']:.2f} "
-                          f"success={metrics[f'{f}/successes']}" for f in FEATURES), flush=True)
+                          f"success={metrics[f'{f}/successes']}" for f in self.features), flush=True)
         if update % self.args.save_every == 0 or update == self.args.updates:
           self.save(update)
     finally:

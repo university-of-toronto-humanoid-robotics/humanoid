@@ -63,7 +63,7 @@ with explicitly configurable thresholds and weights.
 
 `RPL-Descend-Stairs` additionally rewards consecutive supported contacts on its
 descending treads and the bottom landing. A tread counts after at least 50% of
-the sole samples match its top surface and upward foot force persists for 0.10 s.
+the sole samples match its top surface and upward foot force persists for 0.20 s.
 Contact shaping ends after 0.30 s; each qualified tread pays a one-time 0.5
 bonus in the dt-scaled reward. A later landing can advance the target after
 sustained support, but skipped treads earn no credit. The policy observations,
@@ -74,6 +74,14 @@ in W&B. Clean descent requires credited contact on every tread before reaching
 the far landing. In fixed-level Viser playback, a green marker shows the
 current target tread. The existing contact sensor gives net force per foot;
 the sole position and terrain height identify the likely supporting tread.
+
+`RPL-Descend-Slower` copies `RPL-Descend-Stairs` with three reward-weight
+changes: `penalty_stumble` is −2 instead of −10,
+`sequential_tread_contact` is 5 instead of 1, and `soft_landing` is −0.003
+instead of −0.001. Its command speeds, terrain,
+observations, actions, and curriculum are identical. It appears in the Colab
+RL training notebook after the branch containing it is loaded. Its training
+runs save under `logs/rsl_rl/rpl_descend_slower/`.
 
 To compare a baseline and a newly trained stair policy on identical level,
 terrain seed, and forward command, run from `training/`:
@@ -274,6 +282,41 @@ is zero. If the robot is already inside the route checker's clearance margin,
 it may still move along a path that increases clearance. The **Maze route** panel
 reports the target and the actual velocity command.
 Manual twist sliders are disabled for this fixed-route task.
+
+### RPL maze without floor obstacles
+
+`RPL-Maze` uses the same offset doorways, walls, corridor route, and wall
+clearance reward as `G1-Open-Maze-HeightMap`. Its floor is flat: the ramps,
+step-over beams, and doorway sills are removed. Each episode starts before the
+first doorway and ends after passing both openings. The 10-level curriculum
+narrows the openings, and progression requires reaching the far end. It keeps
+the RPL stumble and foothold penalties and the 791-input, 29-action MLP layout,
+so existing compatible checkpoints can be used to start training. It is a
+separate task and does not change the four student-distillation terrains.
+
+From `training/`, preview level 9 with an existing maze checkpoint:
+
+```bash
+python scripts/play.py RPL-Maze --terrain-level 9 \
+  --viewer viser --device cpu --num-envs 1 \
+  --checkpoint-file models/old/g1_maze_finetuned/model_11991.pt
+```
+
+To see the geometry alone, replace the checkpoint option with `--agent zero`.
+The route and current target appear in Viser. Select `RPL-Maze` in the Colab
+training notebook; runs save under `logs/rsl_rl/rpl_maze/`.
+
+The separate [six-expert student notebook](notebooks/train_student_v2.ipynb)
+adds `RPL-Maze` and `G1-Flat-HeightMap` to the existing four terrain experts.
+The flat expert keeps its randomized forward, lateral, and heading commands;
+the maze expert follows the doorway route. BC and DAgger sample equally from
+all six experts. Its runs and replay files live under
+`MyDrive/humanoid/logs/student_distill_v2/`, and the notebook checks that a
+selected checkpoint belongs to the six-expert profile. The original
+`train_student.ipynb` continues to use the four-expert profile. Until an
+`RPL-Maze` checkpoint is trained, the new notebook offers the older compatible
+maze checkpoint as a starting teacher; inspect its behavior before relying on
+its demonstrations.
 
 To begin fine-tuning on a chosen curriculum row, set `START_TERRAIN_LEVEL` to
 `0`–`9` in either Colab notebook. `-1` keeps the usual random start on rows 0–1.

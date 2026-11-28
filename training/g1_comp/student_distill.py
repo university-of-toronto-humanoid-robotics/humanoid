@@ -1,4 +1,4 @@
-"""Observation contract and terrain setup for four-expert student imitation."""
+"""Observation contract and terrain setup for student imitation."""
 
 from __future__ import annotations
 
@@ -10,15 +10,19 @@ from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.utils.noise import GaussianNoiseCfg
 
-from .rpl import rpl_env_cfg
+from .env_cfgs import g1_flat_heightmap_env_cfg
+from .rpl import rpl_env_cfg, rpl_maze_env_cfg
 from .student_mapping.observation import StudentHeightMap, StudentMapCfg, student_probe_cfg
 
 FEATURES = ("ascend", "descend", "ramps", "obstacles")
+FEATURES_V2 = (*FEATURES, "maze", "flat")
 TASKS = {
   "ascend": "RPL-Ascend-Stairs",
   "descend": "RPL-Descend-Stairs",
   "ramps": "RPL-Ramps",
   "obstacles": "RPL-Obstacles",
+  "maze": "RPL-Maze",
+  "flat": "G1-Flat-HeightMap",
 }
 
 
@@ -51,9 +55,11 @@ def student_env_cfg(feature: str, *, stage: str, num_envs: int,
                     map_cfg: StudentMapCfg | None = None,
                     resume_levels: list[int] | None = None):
   """Keep the original actor group for the frozen expert; add student separately."""
-  if feature not in FEATURES or stage not in ("bc", "dagger"):
+  if feature not in FEATURES_V2 or stage not in ("bc", "dagger"):
     raise ValueError("Unknown feature or distillation stage")
-  cfg = rpl_env_cfg(feature, play=False)
+  cfg = (rpl_maze_env_cfg() if feature == "maze" else
+         g1_flat_heightmap_env_cfg() if feature == "flat" else
+         rpl_env_cfg(feature, play=False))
   cfg.scene.num_envs = num_envs
   cfg.observations["actor"].enable_corruption = False
   if "corrupt" in cfg.observations["actor"].terms["height_scan"].params:
@@ -74,13 +80,13 @@ def student_env_cfg(feature: str, *, stage: str, num_envs: int,
   cfg.observations["student"] = student
   cfg.scene.sensors = (cfg.scene.sensors or ()) + (student_probe_cfg(map_cfg),)
 
-  if stage == "bc":
+  if stage == "bc" and feature != "flat":
     cfg.curriculum.pop("terrain_levels", None)
     cfg.scene.terrain.max_init_terrain_level = 9
     events = dict(cfg.events)
     events.pop("randomize_terrain", None)
     cfg.events = {"randomize_terrain": EventTermCfg(func=randomize_bc_terrain, mode="reset"), **events}
-  elif resume_levels is not None:
+  elif resume_levels is not None and feature != "flat":
     cfg.events["restore_student_levels"] = EventTermCfg(
       func=restore_terrain_levels, mode="startup", params={"levels": resume_levels}
     )

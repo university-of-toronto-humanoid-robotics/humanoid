@@ -459,10 +459,17 @@ def open_heightmap_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   return cfg
 
 
-def open_maze_heightmap_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+def open_maze_heightmap_env_cfg(play: bool = False, *, flat_only: bool = False) -> ManagerBasedRlEnvCfg:
   """Winding, walled Open lanes; same policy inputs and actions as Open-HeightMap."""
   cfg = open_heightmap_env_cfg(play=play)
-  _use_world(cfg, worlds.maze_world_cfg(preview_start_only=play), play)
+  if flat_only:
+    cfg.rewards.pop("beam_clearance")
+    cfg.scene.sensors = tuple(s for s in (cfg.scene.sensors or ()) if s.name not in BEAM_SENSOR_NAMES)
+    for sensor in cfg.scene.sensors:
+      if sensor.name in {"terrain_scan", *FOOT_SENSOR_NAMES}:
+        sensor.include_geom_groups = (0,)
+  _use_world(cfg, worlds.maze_world_cfg(preview_start_only=play or flat_only,
+                                        flat_only=flat_only), play)
   assert cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None
   world = cfg.scene.terrain.terrain_generator
   fixed_level = int(os.environ["G1_PLAY_TERRAIN_LEVEL"]) if play and "G1_PLAY_TERRAIN_LEVEL" in os.environ else None

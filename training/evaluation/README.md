@@ -18,14 +18,14 @@ For Viser, run the evaluator and open the local URL it prints:
 
 ```bash
 python scripts/eval_course_route.py --viewer viser \
-  --checkpoint models/best_g1_rough_heightmap/model_5996.pt
+  --checkpoint models/old/best_g1_rough_heightmap/model_5996.pt
 ```
 
 On macOS, use `mjpython` for a local MuJoCo window:
 
 ```bash
 mjpython scripts/eval_course_route.py --viewer native \
-  --checkpoint models/best_g1_rough_heightmap/model_5996.pt
+  --checkpoint models/old/best_g1_rough_heightmap/model_5996.pt
 ```
 
 Replace the checkpoint path with any checkpoint from the compatible
@@ -35,9 +35,11 @@ has the same policy observation and action layout.
 
 | Argument | Meaning |
 |---|---|
-| `--checkpoint PATH` | Model to evaluate; defaults to `models/best_g1_rough_heightmap/model_5996.pt`. |
+| `--checkpoint PATH` | Model to evaluate; defaults to `models/old/best_g1_rough_heightmap/model_5996.pt`. |
 | `--viewer OPTION` | `viser` (browser, default), `native` (local MuJoCo window), or `none`. Use `mjpython` with `native` on macOS. |
 | `--route PATH` | Route JSON; defaults to `evaluation/mobility_route.json`. |
+| `--start-waypoint ID` | Spawn before an outbound waypoint such as `P8`; omit to start at `S`. |
+| `--start-lead-m N` | Spawn this many metres before the waypoint along the route (default `0.5`; use `0` for the exact waypoint). |
 | `--max-seconds N` | Simulated-time limit; defaults to 300 seconds. |
 | `--output DIR` | Results directory; defaults to `logs/route_eval/<timestamp>/`. |
 | `--no-log` | Visualize without saving evaluation files. |
@@ -55,6 +57,8 @@ evaluation.
 The student evaluator uses the same competition course, route, velocity
 controller, and viewers. It loads a BC or DAgger `student_*.pt` checkpoint;
 the separate `demos_*.pt` file is not needed for playback.
+The same `--start-waypoint` and `--start-lead-m` options work for the student.
+Starting before an obstacle gives its map history time to fill in.
 
 From `training/`, run either map mode in Viser:
 
@@ -71,9 +75,11 @@ The script also accepts `--viewer none`, `--route`, `--max-seconds`, `--seed`,
 and `--output`, as in the expert evaluator. Logged results go under
 `training/logs/student_route_eval/` by default.
 
-`corrupted` uses the same 3 Hz, partially observed, delayed, noisy elevation
-mapping and noisy joint observations as student training. `clean` turns off
-observation corruption and supplies exact terrain scans in both of the CNN's
-map channels. It is a diagnostic upper bound: the second channel is another
-exact current scan, not a delayed historical measurement. Both modes retain
-the student's 1,600-input observation layout and 29 joint actions.
+`corrupted` uses the same 3 Hz, partially observed, noisy elevation mapping
+and noisy joint observations as student training. The map has no fixed startup
+delay. In Viser, magenta points show the current height map passed to the
+policy; the Student map panel reports its height range. Missing terrain near
+the robot may still appear flat because the mapper falls back to the feet's
+estimated floor height. `clean` supplies the exact current scan in all five
+CNN map channels as a diagnostic upper bound. Both modes use the student's
+3,679-input observation layout and 29 joint actions.

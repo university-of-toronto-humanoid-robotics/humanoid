@@ -1,4 +1,4 @@
-"""Collect four RPL experts and warm up the temporal CNN student with BC."""
+"""Warm up the temporal CNN student with BC (four or six experts)."""
 
 import argparse
 

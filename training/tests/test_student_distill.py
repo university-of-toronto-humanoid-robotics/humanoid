@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import _setup  # noqa: F401,E402
 
 from g1_comp.student_actor import TemporalStudentActor  # noqa: E402
-from g1_comp.student_distill import FEATURES, student_env_cfg  # noqa: E402
+from g1_comp.student_distill import FEATURES, FEATURES_V2, student_env_cfg  # noqa: E402
 from g1_comp.student_replay import StudentReplay  # noqa: E402
 from g1_comp.student_trainer import (  # noqa: E402
   StudentTrainer, _replay_from_file, _save_atomic, bc_fraction, dagger_label_schedule,
@@ -62,6 +62,7 @@ class StudentDistillationTest(unittest.TestCase):
     student = Student()
     pool = SimpleNamespace(env=env, teacher=teacher,
                            terrain=SimpleNamespace(terrain_levels=torch.zeros(2)),
+                           levels=lambda: torch.zeros(2),
                            obs=TensorDict({"student": torch.zeros((2, TemporalStudentActor.OBS_DIM))},
                                           batch_size=[2]))
     trainer = StudentTrainer.__new__(StudentTrainer)
@@ -140,6 +141,34 @@ class StudentDistillationTest(unittest.TestCase):
     self.assertEqual(smaller.bc_coverage(), {feature: [1] * 10 for feature in FEATURES})
     self.assertAlmostEqual(bc_fraction(0), 0.5)
     self.assertAlmostEqual(bc_fraction(1000), 0.1)
+
+  def test_six_expert_flat_commands_maze_and_balanced_replay(self):
+    flat = student_env_cfg("flat", stage="bc", num_envs=60)
+    twist = flat.commands["twist"]
+    self.assertTrue(twist.heading_command)
+    self.assertEqual(twist.ranges.lin_vel_x, (-1.0, 2.0))
+    self.assertEqual(twist.ranges.lin_vel_y, (-1.0, 1.0))
+    self.assertEqual(twist.ranges.ang_vel_z, (-1.0, 1.0))
+    self.assertEqual(flat.scene.terrain.terrain_type, "plane")
+    maze = student_env_cfg("maze", stage="dagger", num_envs=60)
+    self.assertTrue(maze.scene.terrain.terrain_generator.sub_terrains["maze"].flat_only)
+    self.assertIn("terrain_levels", maze.curriculum)
+    self.assertIn("rpl_feature_complete", maze.terminations)
+    replay = StudentReplay(100, FEATURES_V2)
+    for index, feature in enumerate(FEATURES_V2):
+      obs = torch.zeros((10, TemporalStudentActor.OBS_DIM))
+      obs[:, 0] = index
+      labels = torch.zeros((10, 29))
+      levels = torch.zeros(10, dtype=torch.long) if feature == "flat" else torch.arange(10)
+      replay.add_bc(feature, obs, labels, levels)
+      replay.add_dagger(feature, obs + 10, labels)
+    bc_obs, _ = replay.sample(60, 1.0, "cpu")
+    self.assertEqual(torch.bincount(bc_obs[:, 0].long(), minlength=6).tolist(), [10] * 6)
+    mixed, _ = replay.sample(60, 0.5, "cpu")
+    self.assertEqual(int((mixed[:, 0] < 10).sum()), 30)
+    restored = StudentReplay(100, FEATURES_V2)
+    restored.load_state_dict(replay.state_dict())
+    self.assertEqual(restored.bc_coverage(), replay.bc_coverage())
 
   def test_separate_demo_file_and_legacy_checkpoint(self):
     with tempfile.TemporaryDirectory() as directory:

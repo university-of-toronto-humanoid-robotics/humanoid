@@ -25,8 +25,10 @@ from evaluation.route import (
   ROUTE,
   CourseMap,
   RouteFollower,
+  RouteStart,
   build_paths,
   load_route,
+  start_before_waypoint,
 )
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
@@ -37,7 +39,7 @@ from mjlab.viewer.base import VerbosityLevel
 
 TRAINING = Path(__file__).resolve().parents[1]
 TASK = "G1-Course-HeightMap"
-DEFAULT_CHECKPOINT = TRAINING / "models" / "best_g1_rough_heightmap" / "model_5996.pt"
+DEFAULT_CHECKPOINT = TRAINING / "models" / "old" / "best_g1_rough_heightmap" / "model_5996.pt"
 
 
 class RouteEvaluation:
@@ -45,7 +47,7 @@ class RouteEvaluation:
 
   def __init__(self, env, policy, route: dict, course: CourseMap,
                outbound, returning, output: Path, max_seconds: float,
-               record_metrics: bool = True) -> None:
+               record_metrics: bool = True, start_s: float = 0.0) -> None:
     self.env = env
     self.base = env.unwrapped
     self.policy = policy
@@ -56,6 +58,7 @@ class RouteEvaluation:
     self.output = output
     self.max_seconds = max_seconds
     self.record_metrics = record_metrics
+    self.start_s = start_s
     self.robot = self.base.scene["robot"]
     self.foot_contacts = self.base.scene["feet_ground_contact"]
     self.twist = self.base.command_manager.get_term("twist")
@@ -80,14 +83,16 @@ class RouteEvaluation:
   def start_trial(self) -> None:
     self.trial_no += 1
     self.follower = RouteFollower(self.route, self.outbound, self.returning)
+    self.follower.reset(self.start_s)
     self.status = "running"
     self.step_count = 0
     self.error_sum = 0.0
     self.error_square_sum = 0.0
     self.error_max = 0.0
     self.last_cross_track = 0.0
-    self.progress = 0.0
-    self.next_goal = "A1"
+    self.progress = self.start_s / (2 * self.outbound.length)
+    goals = self.follower._goals()
+    self.next_goal = goals[self.follower.goal_index]["id"]
     self.measured_vx = 0.0
     self.target_vx = 0.0
     self.command_vx = 0.0
@@ -373,10 +378,25 @@ class NativeRouteViewer(NativeMujocoViewer):
     self.evaluator.reset_trial()
 
 
+def configure_course_spawn(cfg, course: CourseMap, start: RouteStart) -> None:
+  """Apply a CAD-frame route start to the course's fixed root reset event."""
+  offset = start.xy - COURSE_START_XY
+  z_offset = start.ground_height - float(course.heights_at(COURSE_START_XY))
+  cfg.events["reset_base"].params["pose_range"] = {
+    "x": (float(offset[0]),) * 2,
+    "y": (float(offset[1]),) * 2,
+    "z": (z_offset,) * 2,
+    "yaw": (start.yaw,) * 2,
+  }
+
+
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
   parser.add_argument("--route", type=Path, default=ROUTE)
+  parser.add_argument("--start-waypoint", help="Start before an outbound route waypoint, e.g. P8")
+  parser.add_argument("--start-lead-m", type=float, default=0.5,
+                      help="Distance before the chosen waypoint; 0 starts at it (default: 0.5)")
   parser.add_argument("--viewer", choices=("viser", "native", "none"), default="viser")
   parser.add_argument("--max-seconds", type=float, default=300.0)
   parser.add_argument("--output", type=Path)
@@ -390,9 +410,15 @@ def main() -> None:
   route = load_route(args.route)
   course = CourseMap.load()
   outbound, returning, smoothed = build_paths(route, course)
+  start = (start_before_waypoint(route, course, outbound, args.start_waypoint, args.start_lead_m)
+           if args.start_waypoint else None)
   print(f"Route: {outbound.length:.2f} m out, {returning.length:.2f} m back; "
         f"smoothed corners: {', '.join(smoothed) or 'none'}")
   cfg = load_env_cfg(TASK, play=True)
+  if start is not None:
+    configure_course_spawn(cfg, course, start)
+    print(f"Starting {args.start_lead_m:.2f} m before {args.start_waypoint} at "
+          f"CAD ({start.xy[0]:.2f}, {start.xy[1]:.2f}), heading {start.yaw:.2f} rad")
   agent_cfg = load_rl_cfg(TASK)
   env = RslRlVecEnvWrapper(ManagerBasedRlEnv(cfg=cfg, device="cpu"),
                            clip_actions=agent_cfg.clip_actions)
@@ -403,7 +429,8 @@ def main() -> None:
     policy = runner.get_inference_policy(device="cpu")
     output = args.output or TRAINING / "logs" / "route_eval" / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     evaluator = RouteEvaluation(env, policy, route, course, outbound, returning,
-                                output, args.max_seconds, record_metrics=not args.no_log)
+                                output, args.max_seconds, record_metrics=not args.no_log,
+                                start_s=start.progress_s if start else 0.0)
     evaluator.checkpoint = args.checkpoint.resolve()
     evaluator.route_path = args.route.resolve()
     try:

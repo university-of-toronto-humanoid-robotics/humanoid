@@ -1,4 +1,4 @@
-"""Train the temporal CNN on student rollouts labeled by four RPL experts."""
+"""Train the temporal CNN on student rollouts labeled by four or six experts."""
 
 import argparse
 from pathlib import Path

@@ -117,6 +117,32 @@ class RoutePath:
     return max(previous_s, float(self.s[nearest])), float(np.linalg.norm(self.xy[nearest] - xy))
 
 
+@dataclass
+class RouteStart:
+  xy: np.ndarray
+  yaw: float
+  ground_height: float
+  progress_s: float
+
+
+def start_before_waypoint(route: dict, course: CourseMap, path: RoutePath,
+                          waypoint_id: str, lead_m: float = 0.5) -> RouteStart:
+  """Pick a route-aligned spawn shortly before a named outbound waypoint."""
+  if lead_m < 0:
+    raise ValueError("Start lead distance must be nonnegative")
+  point = next((p for p in route["waypoints"] if p["id"] == waypoint_id), None)
+  if point is None:
+    raise ValueError(f"Unknown route waypoint {waypoint_id!r}")
+  target = np.array([point["x"], point["y"]])
+  index = int(np.argmin(np.linalg.norm(path.xy - target, axis=1)))
+  progress_s = max(0.0, float(path.s[index]) - lead_m)
+  xy = path.point_at(progress_s)
+  before = path.point_at(max(0.0, progress_s - 0.15))
+  after = path.point_at(min(path.length, progress_s + 0.15))
+  yaw = math.atan2(float(after[1] - before[1]), float(after[0] - before[0]))
+  return RouteStart(xy, yaw, float(course.heights_at(xy)), progress_s)
+
+
 def build_paths(route: dict, course: CourseMap) -> tuple[RoutePath, RoutePath, list[str]]:
   """Smooth free via-point corners and reject any resulting path near a wall."""
   points = route["waypoints"]
@@ -193,10 +219,16 @@ class RouteFollower:
     self.radius = float(route["goal_radius_m"])
     self.reset()
 
-  def reset(self) -> None:
+  def reset(self, start_s: float = 0.0) -> None:
+    if not 0.0 <= start_s <= self.paths["outbound"].length:
+      raise ValueError("Start progress is outside the outbound route")
     self.phase = "outbound"
-    self.progress_s = 0.0
+    self.progress_s = start_s
     self.goal_index = 0
+    goals = self._goals()
+    while (self.goal_index < len(goals) - 1 and
+           self.paths["outbound"].goal_s[goals[self.goal_index]["id"]] < start_s - 1e-6):
+      self.goal_index += 1
     self.target_vx = 0.0
     self.filtered_vx: float | None = None
 

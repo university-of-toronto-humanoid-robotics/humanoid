@@ -8,10 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 
 import _setup  # noqa: F401  (registers the RPL tasks)
-import numpy as np
 import torch
 
 from evaluation.student_course import add_student_observations
+from evaluation.student_map_viewer import StudentMapOverlay, StudentMapPolicy
 from g1_comp.rpl import rpl_env_cfg
 from g1_comp.student_actor import LegacyTemporalStudentActor, TemporalStudentActor
 from g1_comp.student_mapping.observation import StudentMapCfg
@@ -22,49 +22,8 @@ from mjlab.tasks.registry import load_rl_cfg
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 
 
-class StudentMapPolicy:
-  """Keep the exact map passed to the student for viewer display."""
-
-  def __init__(self, actor: LegacyTemporalStudentActor | TemporalStudentActor):
-    self.actor = actor
-    self.current_map: np.ndarray | None = None
-
-  def __call__(self, obs):
-    values = obs["student"]
-    start = self.actor.STATE_DIM
-    self.current_map = values[0, start:start + 33 * 21].detach().cpu().numpy().copy()
-    return self.actor(obs)
-
-
-class StudentMapViserViewer(ViserPlayViewer):
-  """Show the student's current 33 x 21 height observation as world points."""
-
-  def setup(self) -> None:
-    super().setup()
-    self._map_points = self._server.scene.add_point_cloud(
-      "/student_height_map", np.zeros((33 * 21, 3), dtype=np.float32),
-      colors=(30, 210, 255), point_size=0.025, point_shape="circle", visible=False,
-    )
-    along = np.linspace(-0.5, 1.1, 33)
-    across = np.linspace(-0.5, 0.5, 21)
-    x, y = np.meshgrid(along, across, indexing="ij")
-    self._map_xy = np.stack((x.ravel(), y.ravel()), axis=-1)
-
-  def sync_env_to_viewer(self) -> None:
-    super().sync_env_to_viewer()
-    values = self.policy.current_map
-    if values is None:
-      return
-    robot = self.env.unwrapped.scene["robot"]
-    pelvis_idx = list(robot.body_names).index("pelvis")
-    pose = robot.data.body_link_pose_w[0, pelvis_idx].detach().cpu().numpy()
-    w, x, y, z = pose[3:7]
-    yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
-    c, s = np.cos(yaw), np.sin(yaw)
-    xy = self._map_xy @ np.array([[c, s], [-s, c]]) + pose[:2]
-    points = np.column_stack((xy, pose[2] - values))
-    self._map_points.points = (points + self._scene._scene_offset).astype(np.float32)
-    self._map_points.visible = True
+class StudentMapViserViewer(StudentMapOverlay, ViserPlayViewer):
+  """Show the student input map alongside a single RPL terrain."""
 
 
 def main() -> None:

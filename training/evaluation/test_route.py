@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from evaluation.route import CourseMap, RouteFollower, build_paths, load_route
+from evaluation.route import CourseMap, RouteFollower, build_paths, load_route, start_before_waypoint
 
 
 class RouteTests(unittest.TestCase):
@@ -65,6 +65,17 @@ class RouteTests(unittest.TestCase):
       command = follower.update(start, 2.0, measured_vx=1.0, dt=0.1)
     self.assertLess(command.vx, follower.target_vx)
     self.assertGreaterEqual(command.vx, 0.0)
+
+  def test_start_before_stairs_skips_earlier_goals(self) -> None:
+    start = start_before_waypoint(self.route, self.course, self.outbound, "P8")
+    target = next(p for p in self.route["waypoints"] if p["id"] == "P8")
+    target_index = np.argmin(np.linalg.norm(
+      self.outbound.xy - [target["x"], target["y"]], axis=1))
+    self.assertLess(start.progress_s, self.outbound.s[target_index])
+    follower = RouteFollower(self.route, self.outbound, self.returning)
+    follower.reset(start.progress_s)
+    self.assertEqual(follower.update(start.xy, start.yaw).next_goal, "D1")
+    self.assertGreater(follower.progress_s, self.outbound.goal_s["C2"])
 
 
 if __name__ == "__main__":

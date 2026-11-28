@@ -19,7 +19,7 @@ from . import lanes, mdp, worlds
 from .sequential_tread import SequentialTreadReward
 from .env_cfgs import g1_rough_heightmap_env_cfg, g1_rough_heightmap_ppo_runner_cfg
 from .sensors import FOOT_ENV_CONTACT_NAME, SOLE_SENSOR_NAMES, rpl_foot_safety_sensor_cfgs
-from .tasks import _use_lanes, _use_world, open_heightmap_env_cfg
+from .tasks import _use_lanes, _use_world, open_heightmap_env_cfg, open_maze_heightmap_env_cfg
 
 
 RPL_TASKS = {
@@ -30,41 +30,14 @@ RPL_TASKS = {
 }
 
 
-def rpl_env_cfg(
-  feature: str,
-  play: bool = False,
-  *,
-  stumble_enabled: bool = True,
-  stumble_ratio: float = 4.0,
-  stumble_weight: float = -10.0,
-  min_contact_force: float = 5.0,
-  foothold_enabled: bool = True,
-  foothold_epsilon: float = 0.05,
-  foothold_contact_force: float = 1.0,
-  foothold_weight: float | None = None,
-) -> ManagerBasedRlEnvCfg:
-  """Specialize only the world and commands; retain the 791-input policy and rewards.
-
-  Stairs and ramps inherit G1-Rough-HeightMap's rewards. Obstacles inherit
-  G1-Open-HeightMap's arm-posture and beam-clearance rewards as well.
-  """
-  if feature not in RPL_TASKS.values():
-    raise ValueError(f"Unknown RPL feature: {feature}")
-  # Descent uses stronger foothold support; callers can still override it.
-  if foothold_weight is None:
-    foothold_weight = -5.0 if feature == "descend" else -1.0
+def _add_foot_safety(
+  cfg: ManagerBasedRlEnvCfg, *, stumble_enabled: bool, stumble_ratio: float,
+  stumble_weight: float, min_contact_force: float, foothold_enabled: bool,
+  foothold_epsilon: float, foothold_contact_force: float, foothold_weight: float,
+) -> None:
+  """Shared RPL stumble and sole-support objectives for terrain experts."""
   if stumble_weight > 0 or foothold_weight > 0:
     raise ValueError("Safety penalties need nonpositive reward weights")
-  cfg = open_heightmap_env_cfg(play=play) if feature == "obstacles" else g1_rough_heightmap_env_cfg(play=play)
-  if feature == "ramps":
-    cfg.rewards["arm_joint_velocity"] = RewardTermCfg(
-      func=envs_mdp.joint_vel_l2,
-      weight=-0.001,
-      params={"asset_cfg": SceneEntityCfg(
-        "robot", joint_names=r"^(left|right)_(shoulder|elbow|wrist).*"
-      )},
-    )
-
   if stumble_enabled or foothold_enabled:
     safety_sensors = rpl_foot_safety_sensor_cfgs()
     cfg.scene.sensors = (cfg.scene.sensors or ()) + (
@@ -95,6 +68,47 @@ def rpl_env_cfg(
       func=mdp.unsupported_sole_samples, params=foothold_params
     )
   cfg.metrics["traversal_success"] = MetricsTermCfg(func=mdp.rpl_traversal_success)
+
+
+def rpl_env_cfg(
+  feature: str,
+  play: bool = False,
+  *,
+  stumble_enabled: bool = True,
+  stumble_ratio: float = 4.0,
+  stumble_weight: float = -10.0,
+  min_contact_force: float = 5.0,
+  foothold_enabled: bool = True,
+  foothold_epsilon: float = 0.05,
+  foothold_contact_force: float = 1.0,
+  foothold_weight: float | None = None,
+) -> ManagerBasedRlEnvCfg:
+  """Specialize only the world and commands; retain the 791-input policy and rewards.
+
+  Stairs and ramps inherit G1-Rough-HeightMap's rewards. Obstacles inherit
+  G1-Open-HeightMap's arm-posture and beam-clearance rewards as well.
+  """
+  if feature not in RPL_TASKS.values():
+    raise ValueError(f"Unknown RPL feature: {feature}")
+  # Descent uses stronger foothold support; callers can still override it.
+  if foothold_weight is None:
+    foothold_weight = -5.0 if feature == "descend" else -1.0
+  cfg = open_heightmap_env_cfg(play=play) if feature == "obstacles" else g1_rough_heightmap_env_cfg(play=play)
+  if feature == "ramps":
+    cfg.rewards["arm_joint_velocity"] = RewardTermCfg(
+      func=envs_mdp.joint_vel_l2,
+      weight=-0.001,
+      params={"asset_cfg": SceneEntityCfg(
+        "robot", joint_names=r"^(left|right)_(shoulder|elbow|wrist).*"
+      )},
+    )
+
+  _add_foot_safety(
+    cfg, stumble_enabled=stumble_enabled, stumble_ratio=stumble_ratio,
+    stumble_weight=stumble_weight, min_contact_force=min_contact_force,
+    foothold_enabled=foothold_enabled, foothold_epsilon=foothold_epsilon,
+    foothold_contact_force=foothold_contact_force, foothold_weight=foothold_weight,
+  )
   if feature == "descend":
     cfg.rewards["sequential_tread_contact"] = RewardTermCfg(
       func=SequentialTreadReward,
@@ -163,6 +177,40 @@ def rpl_env_cfg(
   )
   if not play:
     cfg.curriculum["terrain_levels"] = CurriculumTermCfg(func=lanes.rpl_feature_progress)
+  return cfg
+
+
+def rpl_maze_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Flat corridors with doors, the RPL safety rewards, and full-route progression."""
+  cfg = open_maze_heightmap_env_cfg(play=play, flat_only=True)
+  _add_foot_safety(
+    cfg, stumble_enabled=True, stumble_ratio=4.0, stumble_weight=-10.0,
+    min_contact_force=5.0, foothold_enabled=True, foothold_epsilon=0.05,
+    foothold_contact_force=1.0, foothold_weight=-1.0,
+  )
+  # Always enter from the near end, facing the two offset wall passages.
+  cfg.events["reset_base"].params["pose_range"] = {"yaw": (-0.1, 0.1)}
+  cfg.terminations["lane_bounds"] = TerminationTermCfg(
+    func=lanes.rpl_outside_tile,
+    params={"half_width": worlds.LANE_WIDTH / 2 + 0.15},
+  )
+  # From the x=0.4 spawn, 6.8 m passes both doors and stops before the tile end.
+  goal_distance = 6.8
+  cfg.terminations["rpl_feature_complete"] = TerminationTermCfg(
+    func=lanes.rpl_feature_complete, params={"goal_distance": goal_distance}, time_out=True,
+  )
+  if not play:
+    cfg.curriculum["terrain_levels"] = CurriculumTermCfg(
+      func=lanes.rpl_feature_progress, params={"goal_distance": goal_distance},
+    )
+  return cfg
+
+
+def rpl_descend_slower_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """The descent expert with lighter stumble and stronger tread and landing rewards."""
+  cfg = rpl_env_cfg("descend", play=play, stumble_weight=-2.0)
+  cfg.rewards["sequential_tread_contact"].weight = 5.0
+  cfg.rewards["soft_landing"].weight = -0.003
   return cfg
 
 

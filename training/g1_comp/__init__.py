@@ -12,6 +12,8 @@ Importing this package registers:
   G1-Comp-Course  the same policy setup on the competition course (sim/competition/)
   G1-Comp-Crouch-Test  quick check of crouching + arm override on flat ground (small GPUs)
   RPL-CNN-Ascend-Stairs  RPL-inspired stair rewards with a CNN height-map actor
+  RPL-Maze  flat corridors and narrow doorways with RPL foot safety rewards
+  RPL-Descend-Slower  descent with lighter stumble and stronger tread-contact rewards
 
 Flat, Ramp, Stairs, Open, Rough, VeryRough, Competition and their -Crouch
 variants share the new policy layout. G1-Flat-HeightMap, G1-Rough-HeightMap,
@@ -39,7 +41,8 @@ from .env_cfgs import (
 )
 from .tasks import (TASKS, open_heightmap_env_cfg, open_heightmap_ppo_runner_cfg,
                     open_maze_heightmap_env_cfg, open_maze_heightmap_ppo_runner_cfg, runner_cfg)
-from .rpl import RPL_TASKS, rpl_env_cfg, rpl_runner_cfg
+from .rpl import (RPL_TASKS, rpl_descend_slower_env_cfg, rpl_env_cfg,
+                  rpl_maze_env_cfg, rpl_runner_cfg)
 from .rpl_cnn import TASK as RPL_CNN_ASCEND_TASK, cnn_ascend_env_cfg, cnn_ascend_runner_cfg
 from .cnn_flat import TASK as CNN_FLAT_TASK, cnn_flat_runner_cfg
 
@@ -142,6 +145,22 @@ for _task_id, _feature in RPL_TASKS.items():
     rl_cfg=rpl_runner_cfg(_task_id),
     runner_cls=VelocityOnPolicyRunner,
   )
+
+register_mjlab_task(
+  task_id="RPL-Maze",
+  env_cfg=rpl_maze_env_cfg(),
+  play_env_cfg=rpl_maze_env_cfg(play=True),
+  rl_cfg=rpl_runner_cfg("RPL-Maze"),
+  runner_cls=VelocityOnPolicyRunner,
+)
+
+register_mjlab_task(
+  task_id="RPL-Descend-Slower",
+  env_cfg=rpl_descend_slower_env_cfg(),
+  play_env_cfg=rpl_descend_slower_env_cfg(play=True),
+  rl_cfg=rpl_runner_cfg("RPL-Descend-Slower"),
+  runner_cls=VelocityOnPolicyRunner,
+)
 
 register_mjlab_task(
   task_id=RPL_CNN_ASCEND_TASK,

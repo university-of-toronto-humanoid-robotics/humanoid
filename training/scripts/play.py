@@ -30,7 +30,7 @@ if "--terrain-level" in sys.argv:
   task = sys.argv[1].removesuffix("-Crouch") if len(sys.argv) > 1 else ""
   if task not in {"G1-Open-HeightMap", "G1-Open-Maze-HeightMap", "Open", "Ramp", "Stairs",
                   "RPL-Ascend-Stairs", "RPL-Descend-Stairs", "RPL-Ramps", "RPL-Obstacles",
-                  "RPL-CNN-Ascend-Stairs"}:
+                  "RPL-CNN-Ascend-Stairs", "RPL-Maze", "RPL-Descend-Slower"}:
     raise SystemExit("--terrain-level is supported for Open, Ramp, Stairs, G1-Open-*-HeightMap, and RPL tasks")
   index = sys.argv.index("--terrain-level")
   if index + 1 >= len(sys.argv):

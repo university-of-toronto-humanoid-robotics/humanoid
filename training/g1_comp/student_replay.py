@@ -69,14 +69,15 @@ def _split_count(total: int, buckets: int) -> list[int]:
 
 
 class StudentReplay:
-  def __init__(self, per_terrain_capacity: int):
+  def __init__(self, per_terrain_capacity: int, features: tuple[str, ...] = FEATURES):
     self.per_terrain_capacity = per_terrain_capacity
-    self.bc = {feature: [Ring(max(1, per_terrain_capacity // 10)) for _ in range(10)]
-               for feature in FEATURES}
-    self.dagger = {feature: Ring(per_terrain_capacity) for feature in FEATURES}
+    self.features = features
+    self.bc = {feature: [Ring(max(1, per_terrain_capacity // (1 if feature == "flat" else 10)))
+                         for _ in range(1 if feature == "flat" else 10)] for feature in features}
+    self.dagger = {feature: Ring(per_terrain_capacity) for feature in features}
 
   def add_bc(self, feature: str, obs: torch.Tensor, actions: torch.Tensor, levels: torch.Tensor):
-    for level in range(10):
+    for level in range(len(self.bc[feature])):
       mask = levels == level
       if mask.any():
         self.bc[feature][level].add(obs[mask], actions[mask])
@@ -90,15 +91,15 @@ class StudentReplay:
     bc_count = round(batch_size * bc_fraction)
     if bc_fraction == 1:
       bc_count = batch_size
-    terrain_bc = _split_count(bc_count, 4)
-    terrain_dagger = _split_count(batch_size - bc_count, 4)
+    terrain_bc = _split_count(bc_count, len(self.features))
+    terrain_dagger = _split_count(batch_size - bc_count, len(self.features))
     parts = []
-    for i, feature in enumerate(FEATURES):
+    for i, feature in enumerate(self.features):
       available = [ring for ring in self.bc[feature] if len(ring)]
       if terrain_bc[i]:
-        if len(available) != 10:
+        if len(available) != len(self.bc[feature]):
           raise RuntimeError(f"BC replay lacks one or more levels for {feature}")
-        for ring, n in zip(available, _split_count(terrain_bc[i], 10), strict=True):
+        for ring, n in zip(available, _split_count(terrain_bc[i], len(available)), strict=True):
           if n:
             parts.append(ring.sample(n))
       if terrain_dagger[i]:
@@ -109,17 +110,19 @@ class StudentReplay:
     return obs[order], actions[order]
 
   def bc_coverage(self):
-    return {feature: [len(ring) for ring in self.bc[feature]] for feature in FEATURES}
+    return {feature: [len(ring) for ring in self.bc[feature]] for feature in self.features}
 
   def state_dict(self):
     return {"capacity": self.per_terrain_capacity,
-            "bc": {f: [ring.state_dict() for ring in self.bc[f]] for f in FEATURES},
-            "dagger": {f: self.dagger[f].state_dict() for f in FEATURES}}
+            "bc": {f: [ring.state_dict() for ring in self.bc[f]] for f in self.features},
+            "dagger": {f: self.dagger[f].state_dict() for f in self.features}}
 
   def load_state_dict(self, state, *, include_dagger: bool = True):
     if state["capacity"] != self.per_terrain_capacity:
       raise ValueError("Replay capacity must match the checkpoint")
-    for feature in FEATURES:
+    if set(state["bc"]) != set(self.features) or set(state["dagger"]) != set(self.features):
+      raise ValueError("Replay expert set differs from this run")
+    for feature in self.features:
       for ring, saved in zip(self.bc[feature], state["bc"][feature], strict=True):
         ring.load_state_dict(saved)
       if include_dagger:
@@ -127,7 +130,9 @@ class StudentReplay:
 
   def load_bc_demos(self, state):
     """Import BC examples into this run's capacity without importing its optimizer."""
-    for feature in FEATURES:
+    if set(state["bc"]) != set(self.features):
+      raise ValueError("BC demos expert set differs from this run")
+    for feature in self.features:
       for ring, saved in zip(self.bc[feature], state["bc"][feature], strict=True):
         if saved["count"]:
           ring.add(saved["observations"], saved["actions"])
