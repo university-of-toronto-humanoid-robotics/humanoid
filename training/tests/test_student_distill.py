@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import _setup  # noqa: F401,E402
 
 from g1_comp.student_actor import TemporalStudentActor  # noqa: E402
+from g1_comp import lanes  # noqa: E402
+from g1_comp.rpl import rpl_maze_env_cfg  # noqa: E402
 from g1_comp.student_distill import FEATURES, FEATURES_V2, student_env_cfg  # noqa: E402
 from g1_comp.student_replay import StudentReplay  # noqa: E402
 from g1_comp.student_trainer import (  # noqa: E402
@@ -21,6 +23,26 @@ from g1_comp.student_trainer import (  # noqa: E402
 
 
 class StudentDistillationTest(unittest.TestCase):
+  def test_maze_episode_route_stays_in_one_section(self):
+    train = rpl_maze_env_cfg()
+    play = rpl_maze_env_cfg(play=True)
+    self.assertEqual(train.scene.terrain.terrain_generator.size[0], 8.0)
+    self.assertEqual(train.scene.terrain.terrain_generator.num_rows, 10)
+    self.assertEqual(train.scene.terrain.terrain_generator.num_cols, 1)
+    self.assertEqual(play.scene.terrain.terrain_generator.num_rows, 1)
+    self.assertEqual(play.scene.terrain.terrain_generator.num_cols, 1)
+    self.assertEqual(play.commands["twist"].num_rows, 1)
+    self.assertTrue(train.commands["twist"].single_tile_route)
+    self.assertEqual(
+      train.terminations["rpl_feature_complete"].params["goal_distance"],
+      train.metrics["traversal_success"].params["goal_distance"],
+    )
+    command = lanes.MazeVelocityCommand.__new__(lanes.MazeVelocityCommand)
+    command.cfg = train.commands["twist"]
+    command.route_x = torch.tensor(lanes.MAZE_ROUTE_X)
+    command.route_index = torch.tensor([0, 12, 13, 25])
+    self.assertEqual(command._last_route_index().tolist(), [12, 12, 25, 25])
+
   def test_dagger_samples_across_rollout_without_overwriting_replay(self):
     class Student:
       def __init__(self):

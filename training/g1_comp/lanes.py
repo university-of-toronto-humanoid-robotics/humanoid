@@ -124,6 +124,7 @@ class MazeVelocityCommandCfg(LaneVelocityCommandCfg):
   num_rows: int = 10
   tile_length: float = 8.0
   fixed_level: int | None = None
+  single_tile_route: bool = False
   waypoint_radius: float = 0.18
   passage_radius: float = 0.08
   cruise_speed_range: tuple[float, float] = (0.40, 0.45)
@@ -205,6 +206,13 @@ class MazeVelocityCommand(LaneVelocityCommand):
     y = self.terrain.env_origins[:, 1] + offset * self.route_offset[point] + MAZE_ROUTE_SWING_M * self.route_swing[point]
     return torch.stack((x, y), dim=1)
 
+  def _last_route_index(self) -> torch.Tensor:
+    """Keep the expert's route in its assigned curriculum tile."""
+    n = len(MAZE_ROUTE_X)
+    if self.cfg.single_tile_route:
+      return (self.route_index // n + 1) * n - 1
+    return torch.full_like(self.route_index, self.cfg.num_rows * n - 1)
+
   def _resample_command(self, env_ids: torch.Tensor) -> None:
     # The route and speeds sampled at reset stay fixed throughout an episode.
     # CommandManager resampling must not change them mid-route.
@@ -254,9 +262,9 @@ class MazeVelocityCommand(LaneVelocityCommand):
     target = self._target_position()
     active_index = self.route_index.clone()
     visible = (target[:, 0] >= pos[:, 0] - 0.05) & self._segment_clear(pos, target)
-    last = self.cfg.num_rows * len(MAZE_ROUTE_X) - 1
+    last = self._last_route_index()
     for steps_forward in range(1, 5):
-      future_index = (self.route_index + steps_forward).clamp(max=last)
+      future_index = torch.minimum(self.route_index + steps_forward, last)
       future = self._target_position(future_index)
       clear = (future[:, 0] > pos[:, 0] + 0.05) & self._segment_clear(pos, future)
       use = ~visible & clear
@@ -299,7 +307,7 @@ class MazeVelocityCommand(LaneVelocityCommand):
     self.route_pending[:] = False
     # A point can advance only when the robot reaches it. Looking past a door
     # before reaching the approach point would command a path through the leaf.
-    last = self.cfg.num_rows * len(MAZE_ROUTE_X) - 1
+    last = self._last_route_index()
     for _ in range(4):
       target = self._target_position()
       point = self.route_index % len(MAZE_ROUTE_X)

@@ -285,12 +285,14 @@ Manual twist sliders are disabled for this fixed-route task.
 
 ### RPL maze without floor obstacles
 
-`RPL-Maze` uses the same offset doorways, walls, corridor route, and wall
-clearance reward as `G1-Open-Maze-HeightMap`. Its floor is flat: the ramps,
-step-over beams, and doorway sills are removed. Each episode starts before the
-first doorway and ends after passing both openings. The 10-level curriculum
-narrows the openings, and progression requires reaching the far end. It keeps
-the RPL stumble and foothold penalties and the 791-input, 29-action MLP layout,
+`RPL-Maze` uses one 8 m section with an open door followed by an offset wall
+opening. Its floor is flat: ramps, beams, and sills are absent. Each episode
+starts before the door and completes after both openings (6.8 m of forward
+travel). The 10-level curriculum narrows the openings. Training holds one
+section per difficulty level, but each episode's route ends in its assigned
+section. Playback displays only the selected section. Episodes allow up to
+60 seconds for the route's slow doorway commands. It keeps the RPL stumble and
+foothold penalties and the 791-input, 29-action MLP layout,
 so existing compatible checkpoints can be used to start training. It is a
 separate task and does not change the four student-distillation terrains.
 

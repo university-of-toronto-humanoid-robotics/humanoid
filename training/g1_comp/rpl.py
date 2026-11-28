@@ -183,6 +183,25 @@ def rpl_env_cfg(
 def rpl_maze_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Flat corridors with doors, the RPL safety rewards, and full-route progression."""
   cfg = open_maze_heightmap_env_cfg(play=play, flat_only=True)
+  twist = cfg.commands["twist"]
+  assert isinstance(twist, lanes.MazeVelocityCommandCfg)
+  twist.single_tile_route = True
+  world = cfg.scene.terrain.terrain_generator
+  assert world is not None
+  # One geometry tile per difficulty level is sufficient; batched robots live
+  # in independent MuJoCo worlds and can share the same curriculum tile.
+  world.num_cols = 1
+  if play:
+    # Training keeps ten difficulty rows, but playback renders only one tile.
+    level = twist.fixed_level if twist.fixed_level is not None else 0
+    world.num_rows = 1
+    world.difficulty_range = (level / 10, (level + 1) / 10)
+    twist.num_rows = 1
+    twist.fixed_level = level
+    cfg.rewards["wall_proximity"].params["num_rows"] = 1
+    cfg.rewards["wall_proximity"].params["fixed_level"] = level
+  # At 0.20–0.25 m/s through the doorways, 20 s is too short to traverse.
+  cfg.episode_length_s = 60.0
   _add_foot_safety(
     cfg, stumble_enabled=True, stumble_ratio=4.0, stumble_weight=-10.0,
     min_contact_force=5.0, foothold_enabled=True, foothold_epsilon=0.05,
@@ -194,11 +213,12 @@ def rpl_maze_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=lanes.rpl_outside_tile,
     params={"half_width": worlds.LANE_WIDTH / 2 + 0.15},
   )
-  # From the x=0.4 spawn, 6.8 m passes both doors and stops before the tile end.
+  # From x=0.4, 6.8 m passes both openings and ends before the tile edge.
   goal_distance = 6.8
   cfg.terminations["rpl_feature_complete"] = TerminationTermCfg(
     func=lanes.rpl_feature_complete, params={"goal_distance": goal_distance}, time_out=True,
   )
+  cfg.metrics["traversal_success"].params["goal_distance"] = goal_distance
   if not play:
     cfg.curriculum["terrain_levels"] = CurriculumTermCfg(
       func=lanes.rpl_feature_progress, params={"goal_distance": goal_distance},
